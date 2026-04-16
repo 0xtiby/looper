@@ -62,6 +62,13 @@ function formatTranscript(result: LoopResult): string {
     parts.push(`--- ITERATION ${iter.number} [${iter.startedAt}] ---\n`);
     parts.push(iter.stdout);
     if (!iter.stdout.endsWith("\n")) parts.push("\n");
+    if (iter.error) {
+      parts.push(
+        `--- ERROR [${iter.error.code}] exit=${iter.exitCode}: ${iter.error.message} ---\n`,
+      );
+    } else if (iter.exitCode !== 0) {
+      parts.push(`--- EXIT ${iter.exitCode} (no error details) ---\n`);
+    }
   }
   return parts.join("");
 }
@@ -91,6 +98,7 @@ function toIterationRecords(result: LoopResult): IterationRecord[] {
     tokensIn: it.tokensIn,
     tokensOut: it.tokensOut,
     sentinelDetected: it.sentinelDetected,
+    error: it.error,
   }));
 }
 

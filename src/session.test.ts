@@ -70,6 +70,7 @@ describe("session", () => {
         tokensIn: 10,
         tokensOut: 20,
         sentinelDetected: true,
+        error: null,
       },
     ];
 

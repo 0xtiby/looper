@@ -7,5 +7,6 @@ coverage/
 .env.*
 !.env.example
 .looper/sessions/
+test/
 .vscode/
 .idea/

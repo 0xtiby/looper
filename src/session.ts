@@ -3,6 +3,12 @@ import path from "node:path";
 import { z } from "zod";
 import { CliNameSchema } from "./config.js";
 
+export const IterationErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  raw: z.string(),
+});
+
 export const IterationRecordSchema = z.object({
   number: z.number().int().positive(),
   exitCode: z.number().int(),
@@ -10,6 +16,7 @@ export const IterationRecordSchema = z.object({
   tokensIn: z.number().int().nullable(),
   tokensOut: z.number().int().nullable(),
   sentinelDetected: z.boolean(),
+  error: IterationErrorSchema.nullable().default(null),
 });
 
 export type IterationRecord = z.infer<typeof IterationRecordSchema>;

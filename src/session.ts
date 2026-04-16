@@ -81,11 +81,18 @@ export function finalizeSession(
   };
 }
 
+const SHORT_ID_LENGTH = 8;
+
 export function sessionBasename(
   session: Pick<Session, "id" | "startedAt">,
 ): string {
-  const ts = session.startedAt.replace(/[-:]/g, "").replace(/\.\d+/, "");
-  return `${session.id}_${ts}`;
+  const shortId = session.id.slice(0, SHORT_ID_LENGTH);
+  const ts = session.startedAt
+    .replace(/\.\d+Z$/, "")
+    .replace(/Z$/, "")
+    .replace(/:/g, "-")
+    .replace("T", "-T");
+  return `${shortId}_${ts}`;
 }
 
 export async function writeSession(
@@ -111,9 +118,13 @@ export async function readSession(
     if (isFileNotFound(err)) return null;
     throw err;
   }
+  const short = id.slice(0, SHORT_ID_LENGTH);
   const match = files.find(
     (f) =>
-      f.endsWith(".json") && (f === `${id}.json` || f.startsWith(`${id}_`)),
+      f.endsWith(".json") &&
+      (f === `${id}.json` ||
+        f.startsWith(`${id}_`) ||
+        f.startsWith(`${short}_`)),
   );
   if (!match) return null;
   const raw = await readFile(path.join(dir, match), "utf8");

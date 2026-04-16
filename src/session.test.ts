@@ -106,12 +106,12 @@ describe("session", () => {
     expect(parsed).toEqual(session);
   });
 
-  it("sessionBasename appends a compact timestamp after the id", () => {
+  it("sessionBasename uses a short id and a readable timestamp", () => {
     const session = {
-      id: "my-id",
-      startedAt: "2026-04-16T19:22:00.000Z",
+      id: "4fbf870e-8488-45da-93d2-b1bb2d84b0e7",
+      startedAt: "2026-04-16T19:39:01.000Z",
     };
-    expect(sessionBasename(session)).toBe("my-id_20260416T192200Z");
+    expect(sessionBasename(session)).toBe("4fbf870e_2026-04-16-T19-39-01");
   });
 
   it("readSession returns the persisted session", async () => {

@@ -225,8 +225,9 @@ program
       for (const s of sessions) {
         const preview =
           s.prompt.length > 60 ? `${s.prompt.slice(0, 60)}…` : s.prompt;
+        const shortId = s.id.slice(0, 8);
         console.log(
-          `${s.id}  ${s.startedAt}  (${s.iterations.length} done)  ${preview}`,
+          `${shortId}  ${s.startedAt}  (${s.iterations.length} done)  ${preview}`,
         );
       }
       return;

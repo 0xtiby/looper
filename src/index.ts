@@ -33,6 +33,7 @@ export interface LoopOptions {
   vars?: Record<string, string>;
   sessionId?: string;
   signal?: AbortSignal;
+  startIteration?: number;
   onOutput?: (chunk: string) => void;
 }
 
@@ -54,7 +55,8 @@ export async function loop(
   const sentinel = options.sentinel ?? DEFAULT_SENTINEL;
   const iterations: LoopIteration[] = [];
 
-  for (let number = 1; number <= maxIterations; number++) {
+  const startIteration = options.startIteration ?? 1;
+  for (let number = startIteration; number <= maxIterations; number++) {
     if (options.signal?.aborted) {
       return { iterations, stopReason: "aborted" };
     }

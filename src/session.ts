@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { CliNameSchema } from "./config.js";
 
 export const IterationRecordSchema = z.object({
   number: z.number().int().positive(),
@@ -31,7 +32,7 @@ export type SessionStopReason = z.infer<typeof SessionStopReasonSchema>;
 export const SessionSchema = z.object({
   id: z.string().min(1),
   prompt: z.string(),
-  cli: z.string(),
+  cli: CliNameSchema,
   model: z.string().nullable(),
   maxIterations: z.number().int().positive(),
   state: SessionStateSchema,
@@ -46,7 +47,7 @@ export type Session = z.infer<typeof SessionSchema>;
 export interface NewSessionInput {
   id: string;
   prompt: string;
-  cli: string;
+  cli: z.infer<typeof CliNameSchema>;
   model: string | null;
   maxIterations: number;
 }
@@ -89,4 +90,44 @@ export async function writeSession(
   const file = path.join(dir, `${session.id}.json`);
   await writeFile(file, `${JSON.stringify(session, null, 2)}\n`, "utf8");
   return file;
+}
+
+export async function readSession(
+  cwd: string,
+  id: string,
+): Promise<Session | null> {
+  const file = path.join(cwd, ".looper", "sessions", `${id}.json`);
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch (err) {
+    if (isFileNotFound(err)) return null;
+    throw err;
+  }
+  return SessionSchema.parse(JSON.parse(raw));
+}
+
+export async function listInterruptedSessions(cwd: string): Promise<Session[]> {
+  const dir = path.join(cwd, ".looper", "sessions");
+  let files: string[];
+  try {
+    files = await readdir(dir);
+  } catch (err) {
+    if (isFileNotFound(err)) return [];
+    throw err;
+  }
+  const sessions: Session[] = [];
+  for (const f of files) {
+    if (!f.endsWith(".json")) continue;
+    const raw = await readFile(path.join(dir, f), "utf8");
+    const parsed = SessionSchema.safeParse(JSON.parse(raw));
+    if (parsed.success && parsed.data.state === "interrupted") {
+      sessions.push(parsed.data);
+    }
+  }
+  return sessions;
+}
+
+function isFileNotFound(err: unknown): boolean {
+  return err instanceof Error && "code" in err && err.code === "ENOENT";
 }

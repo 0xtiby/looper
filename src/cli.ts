@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CliName } from "@0xtiby/spawner";
 import { Command, InvalidArgumentError, Option } from "commander";
@@ -13,7 +13,9 @@ import { type LoopResult, loop } from "./index.js";
 import {
   finalizeSession,
   type IterationRecord,
+  listInterruptedSessions,
   newActiveSession,
+  readSession,
   writeSession,
 } from "./session.js";
 import { loadPrompt } from "./template.js";
@@ -62,15 +64,21 @@ function formatTranscript(result: LoopResult): string {
   return parts.join("");
 }
 
-async function writeTranscript(
+async function persistTranscript(
   sessionId: string,
   result: LoopResult,
   cwd: string,
+  mode: "write" | "append",
 ): Promise<void> {
   const sessionsDir = path.join(cwd, ".looper", "sessions");
   await mkdir(sessionsDir, { recursive: true });
   const logPath = path.join(sessionsDir, `${sessionId}.log`);
-  await writeFile(logPath, formatTranscript(result), "utf8");
+  const body = formatTranscript(result);
+  if (mode === "append") {
+    await appendFile(logPath, body, "utf8");
+  } else {
+    await writeFile(logPath, body, "utf8");
+  }
 }
 
 function toIterationRecords(result: LoopResult): IterationRecord[] {
@@ -87,6 +95,15 @@ function toIterationRecords(result: LoopResult): IterationRecord[] {
 function describePromptSource(options: RunCommandOptions): string {
   if (options.promptStdin) return "<stdin>";
   return options.prompt ?? "";
+}
+
+function exitCodeForResult(result: LoopResult): number {
+  if (result.stopReason === "aborted") return 130;
+  if (result.stopReason === "error") {
+    const tail = result.iterations.at(-1)?.exitCode ?? 1;
+    return tail === 0 ? 1 : tail;
+  }
+  return 0;
 }
 
 const program = new Command();
@@ -151,9 +168,7 @@ program
     const vars = { ...resolved.vars, ...(options.var ?? {}) };
 
     const controller = new AbortController();
-    const onSigint = () => {
-      controller.abort();
-    };
+    const onSigint = () => controller.abort();
     process.on("SIGINT", onSigint);
 
     let result: LoopResult;
@@ -181,15 +196,92 @@ program
       toIterationRecords(result),
     );
     await writeSession(finalized, hostCwd);
-    await writeTranscript(sessionId, result, hostCwd);
+    await persistTranscript(sessionId, result, hostCwd, "write");
 
-    if (result.stopReason === "aborted") {
-      process.exit(130);
+    const code = exitCodeForResult(result);
+    if (code !== 0) process.exit(code);
+  });
+
+program
+  .command("resume [session-id]")
+  .description("Resume an interrupted session (or list them with no id)")
+  .action(async (sessionId?: string) => {
+    const cwd = process.cwd();
+
+    if (!sessionId) {
+      const sessions = await listInterruptedSessions(cwd);
+      if (sessions.length === 0) {
+        console.log("No interrupted sessions.");
+        return;
+      }
+      for (const s of sessions) {
+        const preview =
+          s.prompt.length > 60 ? `${s.prompt.slice(0, 60)}…` : s.prompt;
+        console.log(
+          `${s.id}  ${s.startedAt}  (${s.iterations.length} done)  ${preview}`,
+        );
+      }
+      return;
     }
-    if (result.stopReason === "error") {
-      const exitCode = result.iterations.at(-1)?.exitCode ?? 1;
-      process.exit(exitCode === 0 ? 1 : exitCode);
+
+    const session = await readSession(cwd, sessionId);
+    if (!session) {
+      console.error(`Session ${sessionId} not found`);
+      process.exit(1);
     }
+    if (session.state !== "interrupted") {
+      console.error(
+        `Session ${sessionId} is ${session.state}, not interrupted`,
+      );
+      process.exit(1);
+    }
+    if (session.prompt === "<stdin>") {
+      console.error("Cannot resume sessions whose prompt came from stdin");
+      process.exit(1);
+    }
+
+    const fileConfig = await loadConfig(cwd);
+    const resolved = resolveConfig(fileConfig);
+    const prompt = await loadPrompt({ value: session.prompt });
+
+    const controller = new AbortController();
+    const onSigint = () => controller.abort();
+    process.on("SIGINT", onSigint);
+
+    let result: LoopResult;
+    try {
+      result = await loop({
+        cli: session.cli,
+        prompt,
+        cwd,
+        maxIterations: session.maxIterations,
+        sentinel: resolved.sentinel,
+        vars: resolved.vars,
+        sessionId: session.id,
+        signal: controller.signal,
+        startIteration: session.iterations.length + 1,
+        onOutput: (chunk) => {
+          process.stdout.write(chunk);
+        },
+      });
+    } finally {
+      process.off("SIGINT", onSigint);
+    }
+
+    const mergedIterations = [
+      ...session.iterations,
+      ...toIterationRecords(result),
+    ];
+    const finalized = finalizeSession(
+      session,
+      result.stopReason,
+      mergedIterations,
+    );
+    await writeSession(finalized, cwd);
+    await persistTranscript(session.id, result, cwd, "append");
+
+    const code = exitCodeForResult(result);
+    if (code !== 0) process.exit(code);
   });
 
 program

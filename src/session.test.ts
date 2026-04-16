@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   finalizeSession,
   type IterationRecord,
+  listInterruptedSessions,
   newActiveSession,
+  readSession,
   SessionSchema,
   writeSession,
 } from "./session.js";
@@ -96,6 +98,61 @@ describe("session", () => {
     );
     const parsed = SessionSchema.parse(JSON.parse(raw));
     expect(parsed).toEqual(session);
+  });
+
+  it("readSession returns the persisted session", async () => {
+    const session = newActiveSession({
+      id: "xyz",
+      prompt: "p",
+      cli: "claude",
+      model: null,
+      maxIterations: 1,
+    });
+    await writeSession(session, workDir);
+    const read = await readSession(workDir, "xyz");
+    expect(read).toEqual(session);
+  });
+
+  it("readSession returns null when the session file is missing", async () => {
+    expect(await readSession(workDir, "does-not-exist")).toBeNull();
+  });
+
+  it("listInterruptedSessions returns only sessions whose state is 'interrupted'", async () => {
+    const active = newActiveSession({
+      id: "active-1",
+      prompt: "p",
+      cli: "claude",
+      model: null,
+      maxIterations: 1,
+    });
+    const completed = finalizeSession(
+      newActiveSession({
+        id: "completed-1",
+        prompt: "p",
+        cli: "claude",
+        model: null,
+        maxIterations: 1,
+      }),
+      "sentinel",
+      [],
+    );
+    const interrupted = finalizeSession(
+      newActiveSession({
+        id: "interrupted-1",
+        prompt: "p",
+        cli: "claude",
+        model: null,
+        maxIterations: 2,
+      }),
+      "aborted",
+      [],
+    );
+    await writeSession(active, workDir);
+    await writeSession(completed, workDir);
+    await writeSession(interrupted, workDir);
+
+    const list = await listInterruptedSessions(workDir);
+    expect(list.map((s) => s.id)).toEqual(["interrupted-1"]);
   });
 
   it("SessionSchema rejects invalid state values", () => {

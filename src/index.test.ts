@@ -226,6 +226,27 @@ describe("loop", () => {
     expect(result.iterations).toHaveLength(1);
   });
 
+  it("numbers iterations from startIteration when resuming", async () => {
+    const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
+      fakeProcess(okResult()),
+    );
+
+    const result = await loop(
+      {
+        cli: "claude",
+        prompt: "i={{ITERATION}}",
+        cwd: "/w",
+        maxIterations: 4,
+        startIteration: 3,
+      },
+      { spawn },
+    );
+
+    expect(result.iterations.map((it) => it.number)).toEqual([3, 4]);
+    expect(spawn.mock.calls[0]?.[0].prompt).toBe("i=3");
+    expect(spawn.mock.calls[1]?.[0].prompt).toBe("i=4");
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);

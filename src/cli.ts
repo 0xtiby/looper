@@ -16,6 +16,8 @@ import {
   listInterruptedSessions,
   newActiveSession,
   readSession,
+  type Session,
+  sessionBasename,
   writeSession,
 } from "./session.js";
 import { loadPrompt } from "./template.js";
@@ -65,14 +67,14 @@ function formatTranscript(result: LoopResult): string {
 }
 
 async function persistTranscript(
-  sessionId: string,
+  session: Pick<Session, "id" | "startedAt">,
   result: LoopResult,
   cwd: string,
   mode: "write" | "append",
 ): Promise<void> {
   const sessionsDir = path.join(cwd, ".looper", "sessions");
   await mkdir(sessionsDir, { recursive: true });
-  const logPath = path.join(sessionsDir, `${sessionId}.log`);
+  const logPath = path.join(sessionsDir, `${sessionBasename(session)}.log`);
   const body = formatTranscript(result);
   if (mode === "append") {
     await appendFile(logPath, body, "utf8");
@@ -202,7 +204,7 @@ program
       toIterationRecords(result),
     );
     await writeSession(finalized, hostCwd);
-    await persistTranscript(sessionId, result, hostCwd, "write");
+    await persistTranscript(session, result, hostCwd, "write");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);
@@ -285,7 +287,7 @@ program
       mergedIterations,
     );
     await writeSession(finalized, cwd);
-    await persistTranscript(session.id, result, cwd, "append");
+    await persistTranscript(session, result, cwd, "append");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);

@@ -9,6 +9,7 @@ import {
   newActiveSession,
   readSession,
   SessionSchema,
+  sessionBasename,
   writeSession,
 } from "./session.js";
 
@@ -93,11 +94,24 @@ describe("session", () => {
     await writeSession(session, workDir);
 
     const raw = await readFile(
-      path.join(workDir, ".looper", "sessions", "abc-123.json"),
+      path.join(
+        workDir,
+        ".looper",
+        "sessions",
+        `${sessionBasename(session)}.json`,
+      ),
       "utf8",
     );
     const parsed = SessionSchema.parse(JSON.parse(raw));
     expect(parsed).toEqual(session);
+  });
+
+  it("sessionBasename appends a compact timestamp after the id", () => {
+    const session = {
+      id: "my-id",
+      startedAt: "2026-04-16T19:22:00.000Z",
+    };
+    expect(sessionBasename(session)).toBe("my-id_20260416T192200Z");
   });
 
   it("readSession returns the persisted session", async () => {

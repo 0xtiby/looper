@@ -81,13 +81,20 @@ export function finalizeSession(
   };
 }
 
+export function sessionBasename(
+  session: Pick<Session, "id" | "startedAt">,
+): string {
+  const ts = session.startedAt.replace(/[-:]/g, "").replace(/\.\d+/, "");
+  return `${session.id}_${ts}`;
+}
+
 export async function writeSession(
   session: Session,
   cwd: string,
 ): Promise<string> {
   const dir = path.join(cwd, ".looper", "sessions");
   await mkdir(dir, { recursive: true });
-  const file = path.join(dir, `${session.id}.json`);
+  const file = path.join(dir, `${sessionBasename(session)}.json`);
   await writeFile(file, `${JSON.stringify(session, null, 2)}\n`, "utf8");
   return file;
 }
@@ -96,14 +103,20 @@ export async function readSession(
   cwd: string,
   id: string,
 ): Promise<Session | null> {
-  const file = path.join(cwd, ".looper", "sessions", `${id}.json`);
-  let raw: string;
+  const dir = path.join(cwd, ".looper", "sessions");
+  let files: string[];
   try {
-    raw = await readFile(file, "utf8");
+    files = await readdir(dir);
   } catch (err) {
     if (isFileNotFound(err)) return null;
     throw err;
   }
+  const match = files.find(
+    (f) =>
+      f.endsWith(".json") && (f === `${id}.json` || f.startsWith(`${id}_`)),
+  );
+  if (!match) return null;
+  const raw = await readFile(path.join(dir, match), "utf8");
   return SessionSchema.parse(JSON.parse(raw));
 }
 

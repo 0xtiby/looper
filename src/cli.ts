@@ -4,8 +4,15 @@ import path from "node:path";
 import type { CliName } from "@0xtiby/spawner";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { type LoopResult, loop } from "./index.js";
+import {
+  completeSession,
+  type IterationRecord,
+  newActiveSession,
+  writeSession,
+} from "./session.js";
 
 const SUPPORTED_CLIS: CliName[] = ["claude", "codex", "opencode"];
+const DEFAULT_MAX_ITERATIONS = 10;
 
 interface RunCommandOptions {
   prompt: string;
@@ -35,11 +42,23 @@ function formatTranscript(result: LoopResult): string {
 async function writeTranscript(
   sessionId: string,
   result: LoopResult,
+  cwd: string,
 ): Promise<void> {
-  const sessionsDir = path.join(process.cwd(), ".looper", "sessions");
+  const sessionsDir = path.join(cwd, ".looper", "sessions");
   await mkdir(sessionsDir, { recursive: true });
   const logPath = path.join(sessionsDir, `${sessionId}.log`);
   await writeFile(logPath, formatTranscript(result), "utf8");
+}
+
+function toIterationRecords(result: LoopResult): IterationRecord[] {
+  return result.iterations.map((it) => ({
+    number: it.number,
+    exitCode: it.exitCode,
+    durationMs: it.durationMs,
+    tokensIn: it.tokensIn,
+    tokensOut: it.tokensOut,
+    sentinelDetected: it.sentinelDetected,
+  }));
 }
 
 const program = new Command();
@@ -65,18 +84,38 @@ program
   )
   .option("--sentinel <string>", "string that marks loop completion in output")
   .action(async (options: RunCommandOptions) => {
+    const cwd = process.cwd();
     const sessionId = randomUUID();
+    const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+
+    const session = newActiveSession({
+      id: sessionId,
+      prompt: options.prompt,
+      cli: options.cli,
+      model: null,
+      maxIterations,
+    });
+    await writeSession(session, cwd);
+
     const result = await loop({
       cli: options.cli,
       prompt: options.prompt,
-      cwd: process.cwd(),
-      maxIterations: options.maxIterations,
+      cwd,
+      maxIterations,
       sentinel: options.sentinel,
       onOutput: (chunk) => {
         process.stdout.write(chunk);
       },
     });
-    await writeTranscript(sessionId, result);
+
+    const completed = completeSession(
+      session,
+      result.stopReason,
+      toIterationRecords(result),
+    );
+    await writeSession(completed, cwd);
+    await writeTranscript(sessionId, result, cwd);
+
     if (result.stopReason === "error") {
       const exitCode = result.iterations.at(-1)?.exitCode ?? 1;
       process.exit(exitCode === 0 ? 1 : exitCode);

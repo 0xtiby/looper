@@ -9,6 +9,9 @@ export interface LoopIteration {
   sentinelDetected: boolean;
   stdout: string;
   startedAt: string;
+  durationMs: number;
+  tokensIn: number | null;
+  tokensOut: number | null;
 }
 
 export interface LoopResult {
@@ -94,5 +97,8 @@ async function runIteration(
     sentinelDetected,
     stdout,
     startedAt,
+    durationMs: result.durationMs,
+    tokensIn: result.usage?.inputTokens ?? null,
+    tokensOut: result.usage?.outputTokens ?? null,
   };
 }

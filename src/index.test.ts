@@ -126,6 +126,31 @@ describe("loop", () => {
     expect(result.iterations[0]?.stdout).toBe("alphabeta");
   });
 
+  it("surfaces durationMs and token usage from the spawner", async () => {
+    const spawn: Spawner = () =>
+      fakeProcess({
+        ...okResult(),
+        durationMs: 1234,
+        usage: {
+          inputTokens: 100,
+          outputTokens: 50,
+          totalTokens: 150,
+          cost: null,
+        },
+      });
+
+    const result = await loop(
+      { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { spawn },
+    );
+
+    expect(result.iterations[0]).toMatchObject({
+      durationMs: 1234,
+      tokensIn: 100,
+      tokensOut: 50,
+    });
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);

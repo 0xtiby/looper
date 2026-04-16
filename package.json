@@ -1,0 +1,61 @@
+{
+  "name": "@0xtiby/looper",
+  "version": "0.0.0",
+  "description": "Standalone AI loop orchestration engine",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "looper": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "loop",
+    "orchestration",
+    "claude",
+    "codex"
+  ],
+  "author": "0xtiby",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xtiby/looper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/0xtiby/looper/issues"
+  },
+  "homepage": "https://github.com/0xtiby/looper#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@0xtiby/spawner": "^1.2.0",
+    "commander": "^14.0.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "packageManager": "pnpm@10.28.1"
+}

@@ -25,6 +25,14 @@ describe("substitute", () => {
   it("is strictly flat: values are not themselves substituted", () => {
     expect(substitute("{{A}}", { A: "{{B}}", B: "never" })).toBe("{{B}}");
   });
+
+  it("matches lowercase placeholders against lowercase keys", () => {
+    expect(substitute("hi {{name}}", { name: "bob" })).toBe("hi bob");
+  });
+
+  it("falls back to the uppercase key for lowercase placeholders", () => {
+    expect(substitute("i={{iteration}}", { ITERATION: "3" })).toBe("i=3");
+  });
 });
 
 describe("loadPrompt", () => {

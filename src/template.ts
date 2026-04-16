@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { Readable } from "node:stream";
 
-const PLACEHOLDER = /\{\{([A-Z0-9_]+)\}\}/g;
+const PLACEHOLDER = /\{\{([A-Za-z0-9_]+)\}\}/g;
 
 export function substitute(
   template: string,
@@ -9,6 +9,8 @@ export function substitute(
 ): string {
   return template.replace(PLACEHOLDER, (match, key: string) => {
     if (Object.hasOwn(vars, key)) return vars[key] ?? "";
+    const upper = key.toUpperCase();
+    if (upper !== key && Object.hasOwn(vars, upper)) return vars[upper] ?? "";
     return match;
   });
 }

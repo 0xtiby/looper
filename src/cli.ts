@@ -162,6 +162,8 @@ program
       stdin: process.stdin,
     });
 
+    const vars = { ...resolved.vars, ...(options.var ?? {}) };
+
     const sessionId = randomUUID();
     const session = newActiveSession({
       id: sessionId,
@@ -169,10 +171,9 @@ program
       cli: resolved.cli,
       model: resolved.model,
       maxIterations: resolved.maxIterations,
+      vars,
     });
     await writeSession(session, hostCwd);
-
-    const vars = { ...resolved.vars, ...(options.var ?? {}) };
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -266,7 +267,7 @@ program
         model: resolveModel(session.model ?? resolved.model),
         maxIterations: session.maxIterations,
         sentinel: resolved.sentinel,
-        vars: resolved.vars,
+        vars: { ...resolved.vars, ...session.vars },
         sessionId: session.id,
         signal: controller.signal,
         startIteration: session.iterations.length + 1,

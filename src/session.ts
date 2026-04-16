@@ -35,6 +35,7 @@ export const SessionSchema = z.object({
   cli: CliNameSchema,
   model: z.string().nullable(),
   maxIterations: z.number().int().positive(),
+  vars: z.record(z.string(), z.string()).default({}),
   state: SessionStateSchema,
   startedAt: z.string(),
   completedAt: z.string().nullable(),
@@ -50,6 +51,7 @@ export interface NewSessionInput {
   cli: z.infer<typeof CliNameSchema>;
   model: string | null;
   maxIterations: number;
+  vars?: Record<string, string>;
 }
 
 export function newActiveSession(input: NewSessionInput): Session {
@@ -59,6 +61,7 @@ export function newActiveSession(input: NewSessionInput): Session {
     cli: input.cli,
     model: input.model,
     maxIterations: input.maxIterations,
+    vars: input.vars ?? {},
     state: "active",
     startedAt: new Date().toISOString(),
     completedAt: null,

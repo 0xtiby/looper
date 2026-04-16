@@ -97,6 +97,11 @@ function describePromptSource(options: RunCommandOptions): string {
   return options.prompt ?? "";
 }
 
+function resolveModel(model: string | null | undefined): string | undefined {
+  if (!model || model === "default") return undefined;
+  return model;
+}
+
 function exitCodeForResult(result: LoopResult): number {
   if (result.stopReason === "aborted") return 130;
   if (result.stopReason === "error") {
@@ -177,6 +182,7 @@ program
         cli: resolved.cli,
         prompt,
         cwd: spawnerCwd,
+        model: resolveModel(resolved.model),
         maxIterations: resolved.maxIterations,
         sentinel: resolved.sentinel,
         vars,
@@ -254,6 +260,7 @@ program
         cli: session.cli,
         prompt,
         cwd,
+        model: resolveModel(session.model ?? resolved.model),
         maxIterations: session.maxIterations,
         sentinel: resolved.sentinel,
         vars: resolved.vars,

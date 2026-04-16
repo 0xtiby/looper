@@ -25,7 +25,7 @@ export interface ResolvedConfig {
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
   cli: "claude",
-  model: "opus",
+  model: "default",
   maxIterations: 10,
   sentinel: ":::LOOPER_DONE:::",
   vars: {},

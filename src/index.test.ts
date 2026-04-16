@@ -95,9 +95,9 @@ describe("loop", () => {
     expect(result.iterations[0]?.sentinelDetected).toBe(true);
   });
 
-  it("invokes onOutput with each text chunk in order", async () => {
-    const chunks = ["hello ", "world", "!"];
-    const spawn: Spawner = () => fakeProcess(okResult(), chunks);
+  it("invokes onOutput with each text chunk, appending a newline when missing", async () => {
+    const spawn: Spawner = () =>
+      fakeProcess(okResult(), ["hello", "world\n", "!"]);
     const received: string[] = [];
 
     await loop(
@@ -111,19 +111,18 @@ describe("loop", () => {
       { spawn },
     );
 
-    expect(received).toEqual(chunks);
+    expect(received).toEqual(["hello\n", "world\n", "!\n"]);
   });
 
-  it("captures per-iteration stdout in the result", async () => {
-    const chunks = ["alpha", "beta"];
-    const spawn: Spawner = () => fakeProcess(okResult(), chunks);
+  it("captures per-iteration stdout with one line per event", async () => {
+    const spawn: Spawner = () => fakeProcess(okResult(), ["alpha", "beta"]);
 
     const result = await loop(
       { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
       { spawn },
     );
 
-    expect(result.iterations[0]?.stdout).toBe("alphabeta");
+    expect(result.iterations[0]?.stdout).toBe("alpha\nbeta\n");
   });
 
   it("surfaces durationMs and token usage from the spawner", async () => {

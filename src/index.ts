@@ -24,12 +24,14 @@ export interface LoopOptions {
   cli: CliName;
   prompt: string;
   cwd: string;
+  model?: string;
   maxIterations?: number;
   sentinel?: string;
   vars?: Record<string, string>;
   sessionId?: string;
   signal?: AbortSignal;
   startIteration?: number;
+  autoApprove?: boolean;
   onOutput?: (chunk: string) => void;
 }
 
@@ -66,6 +68,8 @@ export async function loop(
         cli: options.cli,
         prompt,
         cwd: options.cwd,
+        model: options.model,
+        autoApprove: options.autoApprove ?? true,
       },
       {
         sentinel,
@@ -128,8 +132,11 @@ async function runIteration(
     let sentinelDetected = false;
     for await (const event of proc.events) {
       if (event.type !== "text" || typeof event.content !== "string") continue;
-      stdout += event.content;
-      ctx.onOutput?.(event.content);
+      const chunk = event.content.endsWith("\n")
+        ? event.content
+        : `${event.content}\n`;
+      stdout += chunk;
+      ctx.onOutput?.(chunk);
       if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
         sentinelDetected = true;
       }

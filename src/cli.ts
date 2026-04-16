@@ -11,7 +11,7 @@ import {
 } from "./config.js";
 import { type LoopResult, loop } from "./index.js";
 import {
-  completeSession,
+  finalizeSession,
   type IterationRecord,
   newActiveSession,
   writeSession,
@@ -150,27 +150,42 @@ program
 
     const vars = { ...resolved.vars, ...(options.var ?? {}) };
 
-    const result = await loop({
-      cli: resolved.cli,
-      prompt,
-      cwd: spawnerCwd,
-      maxIterations: resolved.maxIterations,
-      sentinel: resolved.sentinel,
-      vars,
-      sessionId,
-      onOutput: (chunk) => {
-        process.stdout.write(chunk);
-      },
-    });
+    const controller = new AbortController();
+    const onSigint = () => {
+      controller.abort();
+    };
+    process.on("SIGINT", onSigint);
 
-    const completed = completeSession(
+    let result: LoopResult;
+    try {
+      result = await loop({
+        cli: resolved.cli,
+        prompt,
+        cwd: spawnerCwd,
+        maxIterations: resolved.maxIterations,
+        sentinel: resolved.sentinel,
+        vars,
+        sessionId,
+        signal: controller.signal,
+        onOutput: (chunk) => {
+          process.stdout.write(chunk);
+        },
+      });
+    } finally {
+      process.off("SIGINT", onSigint);
+    }
+
+    const finalized = finalizeSession(
       session,
       result.stopReason,
       toIterationRecords(result),
     );
-    await writeSession(completed, hostCwd);
+    await writeSession(finalized, hostCwd);
     await writeTranscript(sessionId, result, hostCwd);
 
+    if (result.stopReason === "aborted") {
+      process.exit(130);
+    }
     if (result.stopReason === "error") {
       const exitCode = result.iterations.at(-1)?.exitCode ?? 1;
       process.exit(exitCode === 0 ? 1 : exitCode);

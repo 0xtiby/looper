@@ -190,6 +190,42 @@ describe("loop", () => {
     expect(spawn.mock.calls[0]?.[0].prompt).toBe("it=overridden mode=fast");
   });
 
+  it("stops with 'aborted' and calls proc.interrupt when signal fires mid-iteration", async () => {
+    const controller = new AbortController();
+    const interrupt = vi.fn(async (): Promise<CliResult> => okResult());
+    const waitForAbort = async function* (): AsyncGenerator<CliEvent> {
+      await new Promise<void>((resolve) => {
+        if (controller.signal.aborted) resolve();
+        else
+          controller.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+      });
+    };
+    const spawn: Spawner = () => ({
+      pid: 1,
+      events: waitForAbort(),
+      interrupt,
+      done: Promise.resolve(okResult()),
+    });
+    setImmediate(() => controller.abort());
+
+    const result = await loop(
+      {
+        cli: "claude",
+        prompt: "x",
+        cwd: "/w",
+        maxIterations: 3,
+        signal: controller.signal,
+      },
+      { spawn },
+    );
+
+    expect(interrupt).toHaveBeenCalled();
+    expect(result.stopReason).toBe("aborted");
+    expect(result.iterations).toHaveLength(1);
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);

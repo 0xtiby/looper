@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  completeSession,
+  finalizeSession,
   type IterationRecord,
   newActiveSession,
   SessionSchema,
@@ -37,7 +37,21 @@ describe("session", () => {
     expect(SessionSchema.safeParse(session).success).toBe(true);
   });
 
-  it("completeSession transitions to completed and records iterations", () => {
+  it("finalizeSession with 'aborted' transitions to interrupted", () => {
+    const active = newActiveSession({
+      id: "abc",
+      prompt: "p",
+      cli: "claude",
+      model: null,
+      maxIterations: 3,
+    });
+    const finalized = finalizeSession(active, "aborted", []);
+    expect(finalized.state).toBe("interrupted");
+    expect(finalized.stopReason).toBe("aborted");
+    expect(SessionSchema.safeParse(finalized).success).toBe(true);
+  });
+
+  it("finalizeSession transitions to completed and records iterations", () => {
     const active = newActiveSession({
       id: "abc",
       prompt: "p",
@@ -56,7 +70,7 @@ describe("session", () => {
       },
     ];
 
-    const completed = completeSession(active, "sentinel", iterations);
+    const completed = finalizeSession(active, "sentinel", iterations);
 
     expect(completed.state).toBe("completed");
     expect(completed.stopReason).toBe("sentinel");

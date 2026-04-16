@@ -13,13 +13,18 @@ export const IterationRecordSchema = z.object({
 
 export type IterationRecord = z.infer<typeof IterationRecordSchema>;
 
-export const SessionStateSchema = z.enum(["active", "completed"]);
+export const SessionStateSchema = z.enum([
+  "active",
+  "completed",
+  "interrupted",
+]);
 export type SessionState = z.infer<typeof SessionStateSchema>;
 
 export const SessionStopReasonSchema = z.enum([
   "sentinel",
   "max_iterations",
   "error",
+  "aborted",
 ]);
 export type SessionStopReason = z.infer<typeof SessionStopReasonSchema>;
 
@@ -61,14 +66,14 @@ export function newActiveSession(input: NewSessionInput): Session {
   };
 }
 
-export function completeSession(
+export function finalizeSession(
   session: Session,
   stopReason: SessionStopReason,
   iterations: IterationRecord[],
 ): Session {
   return {
     ...session,
-    state: "completed",
+    state: stopReason === "aborted" ? "interrupted" : "completed",
     completedAt: new Date().toISOString(),
     stopReason,
     iterations,

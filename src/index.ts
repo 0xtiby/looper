@@ -2,7 +2,11 @@ import type { CliName, CliProcess, SpawnOptions } from "@0xtiby/spawner";
 import { spawn as spawnCli } from "@0xtiby/spawner";
 import { substitute } from "./template.js";
 
-export type LoopStopReason = "sentinel" | "max_iterations" | "error";
+export type LoopStopReason =
+  | "sentinel"
+  | "max_iterations"
+  | "error"
+  | "aborted";
 
 export interface LoopIteration {
   number: number;
@@ -28,6 +32,7 @@ export interface LoopOptions {
   sentinel?: string;
   vars?: Record<string, string>;
   sessionId?: string;
+  signal?: AbortSignal;
   onOutput?: (chunk: string) => void;
 }
 
@@ -50,6 +55,9 @@ export async function loop(
   const iterations: LoopIteration[] = [];
 
   for (let number = 1; number <= maxIterations; number++) {
+    if (options.signal?.aborted) {
+      return { iterations, stopReason: "aborted" };
+    }
     const prompt = substitute(
       options.prompt,
       buildVars(number, maxIterations, options.sessionId, options.vars),
@@ -61,9 +69,17 @@ export async function loop(
         prompt,
         cwd: options.cwd,
       },
-      { sentinel, number, onOutput: options.onOutput },
+      {
+        sentinel,
+        number,
+        onOutput: options.onOutput,
+        signal: options.signal,
+      },
     );
     iterations.push(iteration);
+    if (options.signal?.aborted) {
+      return { iterations, stopReason: "aborted" };
+    }
     if (iteration.sentinelDetected) {
       return { iterations, stopReason: "sentinel" };
     }
@@ -78,6 +94,7 @@ interface IterationContext {
   sentinel: string;
   number: number;
   onOutput?: (chunk: string) => void;
+  signal?: AbortSignal;
 }
 
 function buildVars(
@@ -101,25 +118,36 @@ async function runIteration(
 ): Promise<LoopIteration> {
   const startedAt = new Date().toISOString();
   const proc = spawnFn(spawnOptions);
-  let stdout = "";
-  let sentinelDetected = false;
-  for await (const event of proc.events) {
-    if (event.type !== "text" || typeof event.content !== "string") continue;
-    stdout += event.content;
-    ctx.onOutput?.(event.content);
-    if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
-      sentinelDetected = true;
-    }
-  }
-  const result = await proc.done;
-  return {
-    number: ctx.number,
-    exitCode: result.exitCode,
-    sentinelDetected,
-    stdout,
-    startedAt,
-    durationMs: result.durationMs,
-    tokensIn: result.usage?.inputTokens ?? null,
-    tokensOut: result.usage?.outputTokens ?? null,
+  const onAbort = () => {
+    proc.interrupt().catch(() => {});
   };
+  if (ctx.signal) {
+    if (ctx.signal.aborted) onAbort();
+    else ctx.signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    let stdout = "";
+    let sentinelDetected = false;
+    for await (const event of proc.events) {
+      if (event.type !== "text" || typeof event.content !== "string") continue;
+      stdout += event.content;
+      ctx.onOutput?.(event.content);
+      if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
+        sentinelDetected = true;
+      }
+    }
+    const result = await proc.done;
+    return {
+      number: ctx.number,
+      exitCode: result.exitCode,
+      sentinelDetected,
+      stdout,
+      startedAt,
+      durationMs: result.durationMs,
+      tokensIn: result.usage?.inputTokens ?? null,
+      tokensOut: result.usage?.outputTokens ?? null,
+    };
+  } finally {
+    ctx.signal?.removeEventListener("abort", onAbort);
+  }
 }

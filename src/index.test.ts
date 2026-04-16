@@ -1,11 +1,22 @@
-import type { CliProcess, CliResult, SpawnOptions } from "@0xtiby/spawner";
+import type {
+  CliEvent,
+  CliProcess,
+  CliResult,
+  SpawnOptions,
+} from "@0xtiby/spawner";
 import { describe, expect, it, vi } from "vitest";
 import { loop, type Spawner } from "./index.js";
 
-function fakeProcess(result: CliResult): CliProcess {
+async function* textEvents(chunks: string[]): AsyncGenerator<CliEvent> {
+  for (const content of chunks) {
+    yield { type: "text", timestamp: 0, content, raw: content };
+  }
+}
+
+function fakeProcess(result: CliResult, chunks: string[] = []): CliProcess {
   return {
     pid: 1,
-    events: (async function* () {})(),
+    events: textEvents(chunks),
     interrupt: async () => result,
     done: Promise.resolve(result),
   };
@@ -42,6 +53,48 @@ describe("loop", () => {
     );
   });
 
+  it("iterates up to maxIterations when sentinel never fires and exits clean", async () => {
+    const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
+      fakeProcess(okResult()),
+    );
+
+    const result = await loop(
+      { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 3 },
+      { spawn },
+    );
+
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(result.iterations).toHaveLength(3);
+    expect(result.iterations.map((it) => it.number)).toEqual([1, 2, 3]);
+    expect(result.stopReason).toBe("max_iterations");
+  });
+
+  it("stops with stopReason 'sentinel' when sentinel appears in CLI output", async () => {
+    const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
+      fakeProcess(okResult(), [
+        "working...",
+        "finishing up :::DONE:::",
+        "trailing",
+      ]),
+    );
+
+    const result = await loop(
+      {
+        cli: "claude",
+        prompt: "x",
+        cwd: "/w",
+        maxIterations: 5,
+        sentinel: ":::DONE:::",
+      },
+      { spawn },
+    );
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe("sentinel");
+    expect(result.iterations).toHaveLength(1);
+    expect(result.iterations[0]?.sentinelDetected).toBe(true);
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);
@@ -53,6 +106,7 @@ describe("loop", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.iterations).toHaveLength(1);
-    expect(result.iterations[0]?.result.exitCode).toBe(2);
+    expect(result.iterations[0]?.exitCode).toBe(2);
+    expect(result.iterations[0]?.sentinelDetected).toBe(false);
   });
 });

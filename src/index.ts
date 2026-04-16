@@ -7,6 +7,8 @@ export interface LoopIteration {
   number: number;
   exitCode: number;
   sentinelDetected: boolean;
+  stdout: string;
+  startedAt: string;
 }
 
 export interface LoopResult {
@@ -20,6 +22,7 @@ export interface LoopOptions {
   cwd: string;
   maxIterations?: number;
   sentinel?: string;
+  onOutput?: (chunk: string) => void;
 }
 
 export type Spawner = (options: SpawnOptions) => CliProcess;
@@ -48,8 +51,7 @@ export async function loop(
         prompt: options.prompt,
         cwd: options.cwd,
       },
-      sentinel,
-      number,
+      { sentinel, number, onOutput: options.onOutput },
     );
     iterations.push(iteration);
     if (iteration.sentinelDetected) {
@@ -62,22 +64,35 @@ export async function loop(
   return { iterations, stopReason: "max_iterations" };
 }
 
+interface IterationContext {
+  sentinel: string;
+  number: number;
+  onOutput?: (chunk: string) => void;
+}
+
 async function runIteration(
   spawnFn: Spawner,
   spawnOptions: SpawnOptions,
-  sentinel: string,
-  number: number,
+  ctx: IterationContext,
 ): Promise<LoopIteration> {
+  const startedAt = new Date().toISOString();
   const proc = spawnFn(spawnOptions);
-  let captured = "";
+  let stdout = "";
   let sentinelDetected = false;
   for await (const event of proc.events) {
     if (event.type !== "text" || typeof event.content !== "string") continue;
-    captured += event.content;
-    if (!sentinelDetected && captured.includes(sentinel)) {
+    stdout += event.content;
+    ctx.onOutput?.(event.content);
+    if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
       sentinelDetected = true;
     }
   }
   const result = await proc.done;
-  return { number, exitCode: result.exitCode, sentinelDetected };
+  return {
+    number: ctx.number,
+    exitCode: result.exitCode,
+    sentinelDetected,
+    stdout,
+    startedAt,
+  };
 }

@@ -95,6 +95,37 @@ describe("loop", () => {
     expect(result.iterations[0]?.sentinelDetected).toBe(true);
   });
 
+  it("invokes onOutput with each text chunk in order", async () => {
+    const chunks = ["hello ", "world", "!"];
+    const spawn: Spawner = () => fakeProcess(okResult(), chunks);
+    const received: string[] = [];
+
+    await loop(
+      {
+        cli: "claude",
+        prompt: "x",
+        cwd: "/w",
+        maxIterations: 1,
+        onOutput: (c) => received.push(c),
+      },
+      { spawn },
+    );
+
+    expect(received).toEqual(chunks);
+  });
+
+  it("captures per-iteration stdout in the result", async () => {
+    const chunks = ["alpha", "beta"];
+    const spawn: Spawner = () => fakeProcess(okResult(), chunks);
+
+    const result = await loop(
+      { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { spawn },
+    );
+
+    expect(result.iterations[0]?.stdout).toBe("alphabeta");
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);

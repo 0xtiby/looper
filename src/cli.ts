@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { CliName } from "@0xtiby/spawner";
 import { Command, InvalidArgumentError, Option } from "commander";
-import { loop } from "./index.js";
+import { type LoopResult, loop } from "./index.js";
 
 const SUPPORTED_CLIS: CliName[] = ["claude", "codex", "opencode"];
 
@@ -17,6 +20,26 @@ function parsePositiveInt(value: string): number {
     throw new InvalidArgumentError("must be a positive integer");
   }
   return parsed;
+}
+
+function formatTranscript(result: LoopResult): string {
+  const parts: string[] = [];
+  for (const iter of result.iterations) {
+    parts.push(`--- ITERATION ${iter.number} [${iter.startedAt}] ---\n`);
+    parts.push(iter.stdout);
+    if (!iter.stdout.endsWith("\n")) parts.push("\n");
+  }
+  return parts.join("");
+}
+
+async function writeTranscript(
+  sessionId: string,
+  result: LoopResult,
+): Promise<void> {
+  const sessionsDir = path.join(process.cwd(), ".looper", "sessions");
+  await mkdir(sessionsDir, { recursive: true });
+  const logPath = path.join(sessionsDir, `${sessionId}.log`);
+  await writeFile(logPath, formatTranscript(result), "utf8");
 }
 
 const program = new Command();
@@ -42,13 +65,18 @@ program
   )
   .option("--sentinel <string>", "string that marks loop completion in output")
   .action(async (options: RunCommandOptions) => {
+    const sessionId = randomUUID();
     const result = await loop({
       cli: options.cli,
       prompt: options.prompt,
       cwd: process.cwd(),
       maxIterations: options.maxIterations,
       sentinel: options.sentinel,
+      onOutput: (chunk) => {
+        process.stdout.write(chunk);
+      },
     });
+    await writeTranscript(sessionId, result);
     if (result.stopReason === "error") {
       const exitCode = result.iterations.at(-1)?.exitCode ?? 1;
       process.exit(exitCode === 0 ? 1 : exitCode);

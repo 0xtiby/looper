@@ -1,5 +1,6 @@
 import type { CliName, CliProcess, SpawnOptions } from "@0xtiby/spawner";
 import { spawn as spawnCli } from "@0xtiby/spawner";
+import { substitute } from "./template.js";
 
 export type LoopStopReason = "sentinel" | "max_iterations" | "error";
 
@@ -25,6 +26,8 @@ export interface LoopOptions {
   cwd: string;
   maxIterations?: number;
   sentinel?: string;
+  vars?: Record<string, string>;
+  sessionId?: string;
   onOutput?: (chunk: string) => void;
 }
 
@@ -47,11 +50,15 @@ export async function loop(
   const iterations: LoopIteration[] = [];
 
   for (let number = 1; number <= maxIterations; number++) {
+    const prompt = substitute(
+      options.prompt,
+      buildVars(number, maxIterations, options.sessionId, options.vars),
+    );
     const iteration = await runIteration(
       spawnFn,
       {
         cli: options.cli,
-        prompt: options.prompt,
+        prompt,
         cwd: options.cwd,
       },
       { sentinel, number, onOutput: options.onOutput },
@@ -71,6 +78,20 @@ interface IterationContext {
   sentinel: string;
   number: number;
   onOutput?: (chunk: string) => void;
+}
+
+function buildVars(
+  iteration: number,
+  maxIterations: number,
+  sessionId: string | undefined,
+  userVars: Record<string, string> | undefined,
+): Record<string, string> {
+  const builtIns: Record<string, string> = {
+    ITERATION: String(iteration),
+    MAX_ITERATIONS: String(maxIterations),
+  };
+  if (sessionId !== undefined) builtIns.SESSION_ID = sessionId;
+  return { ...builtIns, ...(userVars ?? {}) };
 }
 
 async function runIteration(

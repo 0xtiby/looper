@@ -151,6 +151,45 @@ describe("loop", () => {
     });
   });
 
+  it("substitutes built-in ITERATION in the prompt before each spawn", async () => {
+    const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
+      fakeProcess(okResult()),
+    );
+
+    await loop(
+      {
+        cli: "claude",
+        prompt: "i={{ITERATION}}/{{MAX_ITERATIONS}}",
+        cwd: "/w",
+        maxIterations: 3,
+      },
+      { spawn },
+    );
+
+    expect(spawn.mock.calls[0]?.[0].prompt).toBe("i=1/3");
+    expect(spawn.mock.calls[1]?.[0].prompt).toBe("i=2/3");
+    expect(spawn.mock.calls[2]?.[0].prompt).toBe("i=3/3");
+  });
+
+  it("applies user vars, letting them override built-ins", async () => {
+    const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
+      fakeProcess(okResult()),
+    );
+
+    await loop(
+      {
+        cli: "claude",
+        prompt: "it={{ITERATION}} mode={{MODE}}",
+        cwd: "/w",
+        maxIterations: 1,
+        vars: { MODE: "fast", ITERATION: "overridden" },
+      },
+      { spawn },
+    );
+
+    expect(spawn.mock.calls[0]?.[0].prompt).toBe("it=overridden mode=fast");
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);

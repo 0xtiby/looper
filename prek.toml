@@ -1,0 +1,7 @@
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "lint", name = "lint", entry = "./scripts/run_silent 'lint' pnpm lint", language = "system", always_run = true, pass_filenames = false },
+  { id = "typecheck", name = "typecheck", entry = "./scripts/run_silent 'typecheck' pnpm typecheck", language = "system", always_run = true, pass_filenames = false },
+  { id = "test", name = "test", entry = "./scripts/run_silent 'tests' pnpm test", language = "system", always_run = true, pass_filenames = false },
+]

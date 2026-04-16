@@ -2,13 +2,9 @@ import type { CliName, CliProcess, SpawnOptions } from "@0xtiby/spawner";
 import { spawn as spawnCli } from "@0xtiby/spawner";
 import { substitute } from "./template.js";
 
-export type LoopStopReason =
-  | "sentinel"
-  | "max_iterations"
-  | "error"
-  | "aborted";
+export type StopReason = "sentinel" | "max_iterations" | "error" | "aborted";
 
-export interface LoopIteration {
+export interface IterationResult {
   number: number;
   exitCode: number;
   sentinelDetected: boolean;
@@ -20,8 +16,8 @@ export interface LoopIteration {
 }
 
 export interface LoopResult {
-  iterations: LoopIteration[];
-  stopReason: LoopStopReason;
+  iterations: IterationResult[];
+  stopReason: StopReason;
 }
 
 export interface LoopOptions {
@@ -53,7 +49,7 @@ export async function loop(
   const spawnFn = deps.spawn ?? spawnCli;
   const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const sentinel = options.sentinel ?? DEFAULT_SENTINEL;
-  const iterations: LoopIteration[] = [];
+  const iterations: IterationResult[] = [];
 
   const startIteration = options.startIteration ?? 1;
   for (let number = startIteration; number <= maxIterations; number++) {
@@ -117,7 +113,7 @@ async function runIteration(
   spawnFn: Spawner,
   spawnOptions: SpawnOptions,
   ctx: IterationContext,
-): Promise<LoopIteration> {
+): Promise<IterationResult> {
   const startedAt = new Date().toISOString();
   const proc = spawnFn(spawnOptions);
   const onAbort = () => {

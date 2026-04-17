@@ -1,8 +1,8 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/looper-logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./assets/looper-logo-light.png">
-    <img alt="Looper" src="./assets/looper-logo-light.png" height="160" style="margin-bottom: 20px;">
+    <source media="(prefers-color-scheme: dark)" srcset="https://placehold.co/600x200/0b0b0b/ffffff?text=Looper&font=raleway">
+    <source media="(prefers-color-scheme: light)" srcset="https://placehold.co/600x200/f5f5f5/111111?text=Looper&font=raleway">
+    <img alt="Looper" src="https://placehold.co/600x200/f5f5f5/111111?text=Looper&font=raleway" height="200" style="margin-bottom: 20px;">
   </picture>
 </div>
 

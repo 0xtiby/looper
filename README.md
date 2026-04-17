@@ -118,6 +118,8 @@ const result = await loop({
   `.trim(),
   cwd: process.cwd(),
   maxIterations: 20,
+  sentinel: ":::DONE:::",
+  vars: { REPO: "0xtiby/looper" },
 });
 
 console.log(result.stopReason); // "sentinel" | "max_iterations" | "error" | "aborted"

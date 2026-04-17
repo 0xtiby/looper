@@ -109,9 +109,17 @@ import { loop } from "@0xtiby/looper";
 
 const result = await loop({
   cli: "claude",
-  prompt: "Fix the failing tests. Emit :::DONE::: when finished.",
+  prompt: `
+    1. Run: gh issue list --repo {{REPO}} --state open --json
+    2. Pick the next unblocked issue labeled "ready".
+    3. Implement it: write code, tests, commit, open a PR,
+    4. Exit.
+    When no unblocked issues remain, emit :::DONE:::
+  `.trim(),
+  cwd: process.cwd(),
+  maxIterations: 20,
   sentinel: ":::DONE:::",
-  maxIterations: 5,
+  vars: { REPO: "0xtiby/looper" },
 });
 
 console.log(result.stopReason); // "sentinel" | "max_iterations" | "error" | "aborted"

@@ -1,30 +1,34 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
-import {
-  mkdtemp,
-  writeFile,
-  rm,
-  readdir,
-  readFile,
-} from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+const DEFAULT_SENTINEL = ":::LOOPER_DONE:::";
+const DEFAULT_MAX_ITERATIONS = 10;
+const TMP_CLEANUP_DELAY_MS = 5000;
 
 type Multiplexer = "zellij" | "tmux";
+type Direction = "right" | "down" | "left" | "up";
+type LooperCLI = "claude" | "codex" | "opencode";
+
+const LOOPER_CLIS = ["claude", "codex", "opencode"] as const;
+const DIRECTIONS = ["right", "down", "left", "up"] as const;
+
+type ToolUpdate = { content: Array<{ type: string; text: string }> };
+type OnUpdate = (u: ToolUpdate) => void;
 
 interface SpawnCtx {
   pi: ExtensionAPI;
-  onUpdate?: (update: { content: Array<{ type: string; text: string }> }) => void;
+  onUpdate?: OnUpdate;
 }
 
 interface PaneOptions {
   name: string;
   cwd: string;
   command: string[];
-  direction?: string;
+  direction?: Direction;
   floating?: boolean;
 }
 
@@ -33,7 +37,11 @@ interface SpawnResult {
   command: string;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+interface MuxAvailability {
+  zellij: boolean;
+  tmux: boolean;
+  preferred: Multiplexer | null;
+}
 
 function makePaneName(): string {
   const ts = Date.now().toString(36).slice(-4);
@@ -41,19 +49,21 @@ function makePaneName(): string {
   return `looper-${ts}-${rand}`;
 }
 
-async function whichMultiplexer(pi: ExtensionAPI): Promise<Multiplexer | null> {
+async function detectMultiplexers(pi: ExtensionAPI): Promise<MuxAvailability> {
   const [zellij, tmux] = await Promise.all([
     pi.exec("which", ["zellij"]).then((r) => r.code === 0),
     pi.exec("which", ["tmux"]).then((r) => r.code === 0),
   ]);
-  if (zellij && process.env.ZELLIJ === "0") return "zellij";
-  if (zellij) return "zellij";
-  if (tmux) return "tmux";
-  return null;
+  const preferred: Multiplexer | null = zellij
+    ? "zellij"
+    : tmux
+      ? "tmux"
+      : null;
+  return { zellij, tmux, preferred };
 }
 
 function isInZellij(): boolean {
-  return process.env.ZELLIJ === "0" || !!process.env.ZELLIJ_SESSION_NAME;
+  return process.env.ZELLIJ !== undefined || !!process.env.ZELLIJ_SESSION_NAME;
 }
 
 async function listPromptFiles(cwd: string): Promise<string[]> {
@@ -68,87 +78,59 @@ async function listPromptFiles(cwd: string): Promise<string[]> {
   }
 }
 
-// ─── Multiplexer backends ────────────────────────────────────────────────────
+function parseMaxIterations(input: string | undefined): number {
+  const parsed = Number.parseInt(input ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_ITERATIONS;
+}
 
-async function spawnZellij(
-  { pi, onUpdate }: SpawnCtx,
-  opts: PaneOptions
-): Promise<SpawnResult> {
-  const args = [
+const muxArgs: Record<Multiplexer, (o: PaneOptions) => string[]> = {
+  zellij: (o) => [
     "run",
     "--name",
-    opts.name,
+    o.name,
     "--close-on-exit",
     "--cwd",
-    opts.cwd,
-  ];
-  if (opts.direction) args.push("--direction", opts.direction);
-  if (opts.floating) args.push("--floating");
-  args.push("--", ...opts.command);
-
-  onUpdate?.({
-    content: [{ type: "text", text: `Spawning Zellij pane \`${opts.name}\`...` }],
-  });
-
-  const result = await pi.exec("zellij", args);
-  if (result.code !== 0) {
-    throw new Error(
-      `zellij run failed (exit ${result.code}): ${result.stderr || result.stdout}`
-    );
-  }
-
-  return { paneName: opts.name, command: opts.command.join(" ") };
-}
-
-async function spawnTmux(
-  { pi, onUpdate }: SpawnCtx,
-  opts: PaneOptions
-): Promise<SpawnResult> {
-  const args = [
-    "new-session",
-    "-d",
-    "-s",
-    opts.name,
-    "-c",
-    opts.cwd,
-    ...opts.command,
-  ];
-
-  onUpdate?.({
-    content: [{ type: "text", text: `Spawning tmux session \`${opts.name}\`...` }],
-  });
-
-  const result = await pi.exec("tmux", args);
-  if (result.code !== 0) {
-    throw new Error(
-      `tmux new-session failed (exit ${result.code}): ${result.stderr || result.stdout}`
-    );
-  }
-
-  return { paneName: opts.name, command: opts.command.join(" ") };
-}
+    o.cwd,
+    ...(o.direction ? ["--direction", o.direction] : []),
+    ...(o.floating ? ["--floating"] : []),
+    "--",
+    ...o.command,
+  ],
+  tmux: (o) => ["new-session", "-d", "-s", o.name, "-c", o.cwd, ...o.command],
+};
 
 async function spawnPane(
   ctx: SpawnCtx,
   mux: Multiplexer,
-  opts: PaneOptions
+  opts: PaneOptions,
 ): Promise<SpawnResult> {
-  if (mux === "zellij") return spawnZellij(ctx, opts);
-  return spawnTmux(ctx, opts);
+  const label = mux === "zellij" ? "pane" : "session";
+  ctx.onUpdate?.({
+    content: [
+      { type: "text", text: `Spawning ${mux} ${label} \`${opts.name}\`...` },
+    ],
+  });
+  const result = await ctx.pi.exec(mux, muxArgs[mux](opts));
+  if (result.code !== 0) {
+    throw new Error(
+      `${mux} failed (exit ${result.code}): ${result.stderr || result.stdout}`,
+    );
+  }
+  return { paneName: opts.name, command: opts.command.join(" ") };
 }
-
-// ─── Looper orchestration ────────────────────────────────────────────────────
 
 interface LooperOptions {
   prompt: string;
   promptFile?: string;
-  cli: string;
+  cli: LooperCLI;
   cwd: string;
   model?: string;
   maxIterations: number;
   sentinel: string;
   vars?: Record<string, string>;
-  direction?: string;
+  direction?: Direction;
   floating: boolean;
 }
 
@@ -156,8 +138,11 @@ async function runLooper(
   pi: ExtensionAPI,
   mux: Multiplexer,
   opts: LooperOptions,
-  onUpdate?: SpawnCtx["onUpdate"]
-): Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }> {
+  onUpdate?: OnUpdate,
+): Promise<{
+  content: Array<{ type: string; text: string }>;
+  details: Record<string, unknown>;
+}> {
   const paneName = makePaneName();
 
   let promptPath: string;
@@ -191,20 +176,28 @@ async function runLooper(
     }
   }
 
-  const result = await spawnPane(
-    { pi, onUpdate },
-    mux,
-    {
-      name: paneName,
-      cwd: opts.cwd,
-      command: ["looper", ...looperArgs],
-      direction: opts.direction,
-      floating: opts.floating,
-    }
-  );
+  const result = await spawnPane({ pi, onUpdate }, mux, {
+    name: paneName,
+    cwd: opts.cwd,
+    command: ["looper", ...looperArgs],
+    direction: opts.direction,
+    floating: opts.floating,
+  });
 
   if (tmpDir) {
-    rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    const dirToRemove = tmpDir;
+    setTimeout(() => {
+      rm(dirToRemove, { recursive: true, force: true }).catch((err) => {
+        onUpdate?.({
+          content: [
+            {
+              type: "text",
+              text: `Warning: failed to clean up tmp prompt dir ${dirToRemove}: ${err?.message ?? err}`,
+            },
+          ],
+        });
+      });
+    }, TMP_CLEANUP_DELAY_MS).unref?.();
   }
 
   const muxLabel = mux === "zellij" ? "pane" : "session";
@@ -230,10 +223,37 @@ async function runLooper(
   };
 }
 
-// ─── Extension ───────────────────────────────────────────────────────────────
+type PromptChoice = { prompt: string; promptFile?: string };
+
+async function pickPrompt(ctx: {
+  ui: any;
+  cwd: string;
+}): Promise<PromptChoice | null> {
+  const promptFiles = await listPromptFiles(ctx.cwd);
+
+  if (promptFiles.length > 0) {
+    const choices = [
+      ...promptFiles.map((p) => ({
+        value: `file:${p}`,
+        label: p.replace(`${ctx.cwd}/`, ""),
+      })),
+      { value: "__new__", label: "✎  Write new prompt..." },
+    ];
+    const choice = await ctx.ui.select("Choose prompt:", choices);
+    if (!choice) return null;
+    if (choice.startsWith("file:")) {
+      const promptFile = choice.slice(5);
+      const prompt = await readFile(promptFile, "utf8");
+      return { prompt, promptFile };
+    }
+  }
+
+  const text = await ctx.ui.editor("Task prompt for looper:", "");
+  if (!text) return null;
+  return { prompt: text };
+}
 
 export default function (pi: ExtensionAPI) {
-  // ─── Tool: looper_run ─────────────────────────────────────────────────────
   pi.registerTool({
     name: "looper_run",
     label: "Looper Run",
@@ -247,51 +267,57 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       prompt: Type.String({ description: "Task prompt passed to looper" }),
-      cli: StringEnum(["claude", "codex", "opencode"] as const),
-      cwd: Type.Optional(Type.String({
-        description: "Working directory (default: current cwd)",
-      })),
-      model: Type.Optional(Type.String({
-        description: "Model override (e.g. opus, sonnet)",
-      })),
+      cli: StringEnum(LOOPER_CLIS),
+      cwd: Type.Optional(
+        Type.String({
+          description: "Working directory (default: current cwd)",
+        }),
+      ),
+      model: Type.Optional(
+        Type.String({
+          description: "Model override (e.g. opus, sonnet)",
+        }),
+      ),
       maxIterations: Type.Optional(
-        Type.Number({ default: 10, description: "Maximum iterations" })
+        Type.Number({
+          default: DEFAULT_MAX_ITERATIONS,
+          description: "Maximum iterations",
+        }),
       ),
       sentinel: Type.Optional(
         Type.String({
-          default: ":::LOOPER_DONE:::",
+          default: DEFAULT_SENTINEL,
           description: "String that signals completion",
-        })
+        }),
       ),
       vars: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description: "Template variables (KEY=VALUE)",
-        })
+        }),
       ),
       multiplexer: Type.Optional(
         StringEnum(["zellij", "tmux"] as const, {
           description: "Force zellij or tmux (default: auto-detect)",
-        })
+        }),
       ),
       direction: Type.Optional(
-        StringEnum(["right", "down", "left", "up"] as const, {
+        StringEnum(DIRECTIONS, {
           description: "Pane direction (zellij only)",
-        })
+        }),
       ),
       floating: Type.Optional(Type.Boolean({ default: false })),
     }),
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
-      const mux = params.multiplexer ?? (await whichMultiplexer(pi));
+      const mux =
+        params.multiplexer ?? (await detectMultiplexers(pi)).preferred;
       if (!mux) {
-        throw new Error(
-          "No multiplexer found. Install zellij or tmux first."
-        );
+        throw new Error("No multiplexer found. Install zellij or tmux first.");
       }
 
       if (mux === "zellij" && !isInZellij()) {
         throw new Error(
           "Zellij detected but pi is not running inside a Zellij session. " +
-            "Start pi from within Zellij, or force tmux with multiplexer: 'tmux'."
+            "Start pi from within Zellij, or force tmux with multiplexer: 'tmux'.",
         );
       }
 
@@ -300,73 +326,39 @@ export default function (pi: ExtensionAPI) {
         mux,
         {
           prompt: params.prompt,
-          cli: params.cli,
+          cli: params.cli as LooperCLI,
           cwd: resolve(params.cwd ?? ctx.cwd),
           model: params.model,
-          maxIterations: params.maxIterations ?? 10,
-          sentinel: params.sentinel ?? ":::LOOPER_DONE:::",
+          maxIterations: params.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+          sentinel: params.sentinel ?? DEFAULT_SENTINEL,
           vars: params.vars,
-          direction: params.direction,
+          direction: params.direction as Direction | undefined,
           floating: params.floating ?? false,
         },
-        onUpdate
+        onUpdate,
       );
     },
   });
 
-  // ─── Command: /looper-run ─────────────────────────────────────────────────
   pi.registerCommand("looper-run", {
     description: "Interactively start a looper run in a new pane or session",
     handler: async (_args, ctx) => {
-      const mux = await whichMultiplexer(pi);
-      if (!mux) {
+      const avail = await detectMultiplexers(pi);
+      if (!avail.preferred) {
         ctx.ui.notify(
           "No multiplexer found. Install zellij or tmux first.",
-          "error"
+          "error",
         );
         return;
       }
 
       const cwd = ctx.cwd;
 
-      // ─ 1. Pick prompt ─────────────────────────────────────────────────────
-      const promptFiles = await listPromptFiles(cwd);
-      let prompt: string | undefined;
-      let promptFile: string | undefined;
+      const picked = await pickPrompt({ ui: ctx.ui, cwd });
+      if (!picked) return;
 
-      if (promptFiles.length > 0) {
-        const choices = [
-          ...promptFiles.map((p) => ({
-            value: `file:${p}`,
-            label: p.replace(`${cwd}/`, ""),
-          })),
-          { value: "__new__", label: "✎  Write new prompt..." },
-        ];
-
-        const choice = await ctx.ui.select("Choose prompt:", choices);
-        if (!choice) return;
-
-        if (choice.startsWith("file:")) {
-          promptFile = choice.slice(5);
-          prompt = await readFile(promptFile, "utf8");
-        } else {
-          const text = await ctx.ui.editor("Task prompt for looper:", "");
-          if (!text) return;
-          prompt = text;
-        }
-      } else {
-        const text = await ctx.ui.editor("Task prompt for looper:", "");
-        if (!text) return;
-        prompt = text;
-      }
-
-      // ─ 2. Pick multiplexer (if both available) ────────────────────────────
-      let chosenMux: Multiplexer = mux;
-      const hasBoth =
-        (await pi.exec("which", ["zellij"]).then((r) => r.code === 0)) &&
-        (await pi.exec("which", ["tmux"]).then((r) => r.code === 0));
-
-      if (hasBoth) {
+      let chosenMux: Multiplexer = avail.preferred;
+      if (avail.zellij && avail.tmux) {
         const pick = await ctx.ui.select("Multiplexer:", [
           { value: "zellij", label: "zellij (pane in current session)" },
           { value: "tmux", label: "tmux (new detached session)" },
@@ -378,62 +370,67 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(
           "Zellij chosen but pi is not inside a Zellij session. " +
             "Use tmux instead, or restart pi from Zellij.",
-          "error"
+          "error",
         );
         return;
       }
 
-      // ─ 3. Pick CLI ────────────────────────────────────────────────────────
-      const cli = await ctx.ui.select("Pick AI CLI:", [
-        "claude",
-        "codex",
-        "opencode",
-      ]);
+      const cli = (await ctx.ui.select("Pick AI CLI:", [...LOOPER_CLIS])) as
+        | LooperCLI
+        | undefined;
       if (!cli) return;
 
-      // ─ 4. Max iterations ──────────────────────────────────────────────────
-      const maxIterStr = await ctx.ui.input("Max iterations:", "10");
-      const maxIterations = Number(maxIterStr) || 10;
+      const model =
+        (await ctx.ui.input(
+          "Model override (optional, e.g. opus, sonnet):",
+          "",
+        )) || undefined;
 
-      // ─ 5. Sentinel ────────────────────────────────────────────────────────
+      const maxIterStr = await ctx.ui.input(
+        "Max iterations:",
+        String(DEFAULT_MAX_ITERATIONS),
+      );
+      const maxIterations = parseMaxIterations(maxIterStr);
+
       const sentinel =
-        (await ctx.ui.input("Sentinel:", ":::LOOPER_DONE:::")) ||
-        ":::LOOPER_DONE:::";
+        (await ctx.ui.input("Sentinel:", DEFAULT_SENTINEL)) || DEFAULT_SENTINEL;
 
-      // ─ 6. Direction / floating (zellij only) ──────────────────────────────
-      let direction: string | undefined;
+      let direction: Direction | undefined;
       let floating = false;
 
       if (chosenMux === "zellij") {
-        direction = await ctx.ui.select("Pane direction:", [
+        const dirPick = await ctx.ui.select("Pane direction:", [
           { value: "right", label: "right →" },
           { value: "down", label: "down ↓" },
           { value: "left", label: "left ←" },
           { value: "up", label: "up ↑" },
         ]);
-        floating = (await ctx.ui.confirm(
-          "Floating pane?",
-          "Open as floating window?"
-        )) ?? false;
+        direction = dirPick as Direction | undefined;
+        floating =
+          (await ctx.ui.confirm(
+            "Floating pane?",
+            "Open as floating window?",
+          )) ?? false;
       }
 
       ctx.ui.notify("Spawning...", "info");
 
       try {
         await runLooper(pi, chosenMux, {
-          prompt: prompt!,
-          promptFile,
+          prompt: picked.prompt,
+          promptFile: picked.promptFile,
           cli,
           cwd,
+          model,
           maxIterations,
           sentinel,
-          direction: direction ?? undefined,
+          direction,
           floating,
         });
 
         ctx.ui.notify(
           `✓ Looper ${chosenMux} pane/session spawned with ${cli}`,
-          "success"
+          "success",
         );
       } catch (e: any) {
         ctx.ui.notify(e?.message ?? String(e), "error");

@@ -242,6 +242,43 @@ Example session JSON:
 }
 ```
 
+## Pi integration
+
+If you use [pi](https://github.com/mariozechner/pi), looper ships a built-in extension for fire-and-forget background runs inside Zellij panes or tmux sessions.
+
+Install looper as a pi package:
+
+```sh
+pi install git:github.com/0xtiby/looper
+```
+
+Then in a pi session:
+
+```
+/looper-run
+```
+
+This opens an interactive wizard that walks you through picking a prompt (from `.looper/*.md` or writing a new one), choosing the AI CLI, and spawning looper in a background pane/session while you keep chatting with pi.
+
+The LLM can also call the `looper_run` tool directly:
+
+```json
+{
+  "name": "looper_run",
+  "parameters": {
+    "prompt": "Refactor auth module. Emit :::LOOPER_DONE::: when finished.",
+    "cli": "claude",
+    "maxIterations": 5
+  }
+}
+```
+
+**Features**
+- Auto-detects Zellij (preferred) or tmux
+- Scans `.looper/*.md` for reusable prompts
+- Zellij: pane direction and floating mode support
+- tmux: new detached sessions
+
 ## License
 
 MIT

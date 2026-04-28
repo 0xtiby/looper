@@ -17,7 +17,7 @@
 
 A standalone engine for looping an AI coding CLI against a prompt until it signals it's done:
 
-1. You give Looper a prompt and pick a CLI (`claude`, `codex`, or `opencode`).
+1. You give Looper a prompt and pick a CLI (`claude`, `codex`, `opencode`, or `pi`).
 2. Looper spawns the CLI, streams its output, and watches for a sentinel string.
 3. It re-spawns from scratch each iteration until the sentinel fires, `maxIterations` is reached, or the CLI exits non-zero.
 
@@ -32,6 +32,7 @@ Under the hood, Looper drives the CLIs via [`@0xtiby/spawner`](https://github.co
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Codex CLI](https://github.com/openai/codex) (`codex`)
   - [OpenCode](https://github.com/sst/opencode) (`opencode`)
+  - [pi](https://github.com/0xtiby/pi) (`pi`)
 
 ## Quick start
 
@@ -82,7 +83,7 @@ cat plan.md | looper run --prompt-stdin
 | --- | --- |
 | `-p, --prompt <value>` | Inline string OR path to an existing file (auto-detected). |
 | `--prompt-stdin` | Read the prompt from stdin. |
-| `--cli <name>` | One of `claude`, `codex`, `opencode`. Overrides config. |
+| `--cli <name>` | One of `claude`, `codex`, `opencode`, `pi`. Overrides config. |
 | `--model <name>` | Model override (e.g. `opus`, `sonnet`). |
 | `--max-iterations <n>` | Cap the number of iterations. |
 | `--sentinel <string>` | String the AI must emit to stop the loop. |
@@ -141,7 +142,7 @@ const result = await loop({
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `cli` | `"claude" \| "codex" \| "opencode"` | — | **Required.** The AI CLI to spawn. |
+| `cli` | `"claude" \| "codex" \| "opencode" \| "pi"` | — | **Required.** The AI CLI to spawn. |
 | `prompt` | `string` | — | **Required.** Prompt string passed to the CLI. |
 | `cwd` | `string` | `process.cwd()` | Working directory for the spawned CLI. |
 | `model` | `string` | — | Model override (e.g. `opus`, `sonnet`). |

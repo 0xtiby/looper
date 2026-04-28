@@ -3,7 +3,7 @@ import path from "node:path";
 import type { CliName } from "@0xtiby/spawner";
 import { z } from "zod";
 
-export const CliNameSchema = z.enum(["claude", "codex", "opencode"]);
+export const CliNameSchema = z.enum(["claude", "codex", "opencode", "pi"]);
 
 export const ConfigSchema = z.object({
   cli: CliNameSchema.optional(),

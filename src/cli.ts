@@ -22,7 +22,7 @@ import {
 } from "./session.js";
 import { loadPrompt } from "./template.js";
 
-const SUPPORTED_CLIS: CliName[] = ["claude", "codex", "opencode"];
+const SUPPORTED_CLIS: CliName[] = ["claude", "codex", "opencode", "pi"];
 
 interface RunCommandOptions {
   prompt?: string;

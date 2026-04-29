@@ -110,9 +110,17 @@ import { loop } from "@0xtiby/looper";
 
 const result = await loop({
   cli: "claude",
-  prompt: "Fix the failing tests. Emit :::DONE::: when finished.",
+  prompt: `
+    1. Run: gh issue list --repo {{REPO}} --state open --json
+    2. Pick the next unblocked issue labeled "ready".
+    3. Implement it: write code, tests, commit, open a PR,
+    4. Exit.
+    When no unblocked issues remain, emit :::DONE:::
+  `.trim(),
+  cwd: process.cwd(),
+  maxIterations: 20,
   sentinel: ":::DONE:::",
-  maxIterations: 5,
+  vars: { REPO: "0xtiby/looper" },
 });
 
 console.log(result.stopReason); // "sentinel" | "max_iterations" | "error" | "aborted"
@@ -234,6 +242,43 @@ Example session JSON:
   ]
 }
 ```
+
+## Pi integration
+
+If you use [pi](https://github.com/mariozechner/pi), looper ships a built-in extension for fire-and-forget background runs inside Zellij panes or tmux sessions.
+
+Install looper as a pi package:
+
+```sh
+pi install git:github.com/0xtiby/looper
+```
+
+Then in a pi session:
+
+```
+/looper-run
+```
+
+This opens an interactive wizard that walks you through picking a prompt (from `.looper/*.md` or writing a new one), choosing the AI CLI, and spawning looper in a background pane/session while you keep chatting with pi.
+
+The LLM can also call the `looper_run` tool directly:
+
+```json
+{
+  "name": "looper_run",
+  "parameters": {
+    "prompt": "Refactor auth module. Emit :::LOOPER_DONE::: when finished.",
+    "cli": "claude",
+    "maxIterations": 5
+  }
+}
+```
+
+**Features**
+- Auto-detects Zellij (preferred) or tmux
+- Scans `.looper/*.md` for reusable prompts
+- Zellij: pane direction and floating mode support
+- tmux: new detached sessions
 
 ## License
 

@@ -5,6 +5,7 @@ import type { CliName } from "@0xtiby/spawner";
 import { Command, InvalidArgumentError, Option } from "commander";
 import {
   applyOverrides,
+  CliNameSchema,
   loadConfig,
   resolveConfig,
   writeDefaultConfig,
@@ -22,7 +23,7 @@ import {
 } from "./session.js";
 import { loadPrompt } from "./template.js";
 
-const SUPPORTED_CLIS: CliName[] = ["claude", "codex", "opencode"];
+const SUPPORTED_CLIS: CliName[] = [...CliNameSchema.options];
 
 interface RunCommandOptions {
   prompt?: string;

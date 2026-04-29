@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@0xtiby/spawner':
-        specifier: ^1.2.1
-        version: 1.2.1
+        specifier: ^1.3.0
+        version: 1.3.0
       '@mariozechner/pi-ai':
         specifier: ^0.70.2
         version: 0.70.2(ws@8.20.0)(zod@4.3.6)
@@ -54,8 +54,8 @@ importers:
 
 packages:
 
-  '@0xtiby/spawner@1.2.1':
-    resolution: {integrity: sha512-Ro94MjbBAEt6NrBEoqsEyQupGS/jjxQXwycjrJMwLyuF4wfafN3I0x2gMtaISvayEfyUNqToZxmp76nq+J2hiA==}
+  '@0xtiby/spawner@1.3.0':
+    resolution: {integrity: sha512-1mCc1oYs3J7xLvx/Iiy8ZGsqPou+d/q6FLcdQsk58Bpl8TJ/MSM9icVP1JV9fB7GPLbxhJjgxdcCQbYFC62j7g==}
 
   '@actions/core@3.0.0':
     resolution: {integrity: sha512-zYt6cz+ivnTmiT/ksRVriMBOiuoUpDCJJlZ5KPl2/FRdvwU3f7MPh9qftvbkXJThragzUZieit2nyHUyw53Seg==}
@@ -3090,7 +3090,7 @@ packages:
 
 snapshots:
 
-  '@0xtiby/spawner@1.2.1': {}
+  '@0xtiby/spawner@1.3.0': {}
 
   '@actions/core@3.0.0':
     dependencies:

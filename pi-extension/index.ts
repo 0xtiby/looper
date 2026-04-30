@@ -223,6 +223,21 @@ async function runLooper(
   };
 }
 
+async function selectLabeled<T extends string>(
+  ui: {
+    select: (title: string, opts: string[]) => Promise<string | undefined>;
+  },
+  title: string,
+  options: ReadonlyArray<readonly [T, string]>,
+): Promise<T | undefined> {
+  const pick = await ui.select(
+    title,
+    options.map(([, label]) => label),
+  );
+  if (!pick) return undefined;
+  return options.find(([, label]) => label === pick)?.[0];
+}
+
 type PromptChoice = { prompt: string; promptFile?: string };
 
 async function pickPrompt(ctx: {
@@ -232,19 +247,17 @@ async function pickPrompt(ctx: {
   const promptFiles = await listPromptFiles(ctx.cwd);
 
   if (promptFiles.length > 0) {
-    const choices = [
-      ...promptFiles.map((p) => ({
-        value: `file:${p}`,
-        label: p.replace(`${ctx.cwd}/`, ""),
-      })),
-      { value: "__new__", label: "✎  Write new prompt..." },
+    const NEW_PROMPT = "__new__";
+    const NEW_PROMPT_LABEL = "✎  Write new prompt...";
+    const options = [
+      ...promptFiles.map((p) => [p, p.replace(`${ctx.cwd}/`, "")] as const),
+      [NEW_PROMPT, NEW_PROMPT_LABEL] as const,
     ];
-    const choice = await ctx.ui.select("Choose prompt:", choices);
-    if (!choice) return null;
-    if (choice.startsWith("file:")) {
-      const promptFile = choice.slice(5);
-      const prompt = await readFile(promptFile, "utf8");
-      return { prompt, promptFile };
+    const chosen = await selectLabeled(ctx.ui, "Choose prompt:", options);
+    if (!chosen) return null;
+    if (chosen !== NEW_PROMPT) {
+      const prompt = await readFile(chosen, "utf8");
+      return { prompt, promptFile: chosen };
     }
   }
 
@@ -359,11 +372,11 @@ export default function (pi: ExtensionAPI) {
 
       let chosenMux: Multiplexer = avail.preferred;
       if (avail.zellij && avail.tmux) {
-        const pick = await ctx.ui.select("Multiplexer:", [
-          { value: "zellij", label: "zellij (pane in current session)" },
-          { value: "tmux", label: "tmux (new detached session)" },
-        ]);
-        if (pick) chosenMux = pick as Multiplexer;
+        chosenMux =
+          (await selectLabeled(ctx.ui, "Multiplexer:", [
+            ["zellij", "zellij (pane in current session)"],
+            ["tmux", "tmux (new detached session)"],
+          ] as const)) ?? avail.preferred;
       }
 
       if (chosenMux === "zellij" && !isInZellij()) {
@@ -399,13 +412,12 @@ export default function (pi: ExtensionAPI) {
       let floating = false;
 
       if (chosenMux === "zellij") {
-        const dirPick = await ctx.ui.select("Pane direction:", [
-          { value: "right", label: "right →" },
-          { value: "down", label: "down ↓" },
-          { value: "left", label: "left ←" },
-          { value: "up", label: "up ↑" },
-        ]);
-        direction = dirPick as Direction | undefined;
+        direction = await selectLabeled(ctx.ui, "Pane direction:", [
+          ["right", "right →"],
+          ["down", "down ↓"],
+          ["left", "left ←"],
+          ["up", "up ↑"],
+        ] as const);
         floating =
           (await ctx.ui.confirm(
             "Floating pane?",

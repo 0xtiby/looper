@@ -232,17 +232,14 @@ async function pickPrompt(ctx: {
   const promptFiles = await listPromptFiles(ctx.cwd);
 
   if (promptFiles.length > 0) {
-    const choices = [
-      ...promptFiles.map((p) => ({
-        value: `file:${p}`,
-        label: p.replace(`${ctx.cwd}/`, ""),
-      })),
-      { value: "__new__", label: "✎  Write new prompt..." },
-    ];
-    const choice = await ctx.ui.select("Choose prompt:", choices);
+    const NEW_PROMPT_LABEL = "✎  Write new prompt...";
+    const fileLabels = promptFiles.map((p) => p.replace(`${ctx.cwd}/`, ""));
+    const labels = [...fileLabels, NEW_PROMPT_LABEL];
+    const choice = await ctx.ui.select("Choose prompt:", labels);
     if (!choice) return null;
-    if (choice.startsWith("file:")) {
-      const promptFile = choice.slice(5);
+    const idx = fileLabels.indexOf(choice);
+    if (idx >= 0) {
+      const promptFile = promptFiles[idx];
       const prompt = await readFile(promptFile, "utf8");
       return { prompt, promptFile };
     }
@@ -359,11 +356,16 @@ export default function (pi: ExtensionAPI) {
 
       let chosenMux: Multiplexer = avail.preferred;
       if (avail.zellij && avail.tmux) {
+        const muxLabels: Record<Multiplexer, string> = {
+          zellij: "zellij (pane in current session)",
+          tmux: "tmux (new detached session)",
+        };
         const pick = await ctx.ui.select("Multiplexer:", [
-          { value: "zellij", label: "zellij (pane in current session)" },
-          { value: "tmux", label: "tmux (new detached session)" },
+          muxLabels.zellij,
+          muxLabels.tmux,
         ]);
-        if (pick) chosenMux = pick as Multiplexer;
+        if (pick === muxLabels.zellij) chosenMux = "zellij";
+        else if (pick === muxLabels.tmux) chosenMux = "tmux";
       }
 
       if (chosenMux === "zellij" && !isInZellij()) {
@@ -399,13 +401,21 @@ export default function (pi: ExtensionAPI) {
       let floating = false;
 
       if (chosenMux === "zellij") {
+        const dirLabels: Record<Direction, string> = {
+          right: "right →",
+          down: "down ↓",
+          left: "left ←",
+          up: "up ↑",
+        };
         const dirPick = await ctx.ui.select("Pane direction:", [
-          { value: "right", label: "right →" },
-          { value: "down", label: "down ↓" },
-          { value: "left", label: "left ←" },
-          { value: "up", label: "up ↑" },
+          dirLabels.right,
+          dirLabels.down,
+          dirLabels.left,
+          dirLabels.up,
         ]);
-        direction = dirPick as Direction | undefined;
+        direction = (Object.keys(dirLabels) as Direction[]).find(
+          (k) => dirLabels[k] === dirPick,
+        );
         floating =
           (await ctx.ui.confirm(
             "Floating pane?",

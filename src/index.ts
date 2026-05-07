@@ -7,17 +7,23 @@ import type {
 import { spawn as spawnCli } from "@0xtiby/spawner";
 import { substitute } from "./template.js";
 
-function textForEvent(event: CliEvent): string | null {
+function transcriptChunkForEvent(event: CliEvent): string | null {
   if (event.type === "text" && typeof event.content === "string") {
     return event.content;
   }
   if (event.type === "error" && typeof event.content === "string") {
-    return `[error] ${event.content}`;
+    return lineChunk(`[error] ${event.content}`);
   }
   if (event.type === "tool_result" && event.toolResult?.error) {
-    return `[tool ${event.toolResult.name} error] ${event.toolResult.error}`;
+    return lineChunk(
+      `[tool ${event.toolResult.name} error] ${event.toolResult.error}`,
+    );
   }
   return null;
+}
+
+function lineChunk(text: string): string {
+  return text.endsWith("\n") ? text : `${text}\n`;
 }
 
 export type StopReason = "sentinel" | "max_iterations" | "error" | "aborted";
@@ -156,9 +162,8 @@ async function runIteration(
     let stdout = "";
     let sentinelDetected = false;
     for await (const event of proc.events) {
-      const text = textForEvent(event);
-      if (text === null) continue;
-      const chunk = text.endsWith("\n") ? text : `${text}\n`;
+      const chunk = transcriptChunkForEvent(event);
+      if (chunk === null) continue;
       stdout += chunk;
       ctx.onOutput?.(chunk);
       if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
@@ -174,7 +179,7 @@ async function runIteration(
         }
       : null;
     if (error && !stdout.includes(error.message)) {
-      const line = `[${error.code}] ${error.message}\n`;
+      const line = lineChunk(`[${error.code}] ${error.message}`);
       stdout += line;
       ctx.onOutput?.(line);
     }

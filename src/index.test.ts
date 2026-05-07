@@ -171,6 +171,21 @@ describe("loop", () => {
     );
   });
 
+  it("separates line-oriented events from preceding raw text chunks", async () => {
+    const spawn: Spawner = () =>
+      fakeProcessWithEvents(okResult(), [
+        textEvent("partial"),
+        { type: "error", timestamp: 0, content: "boom", raw: "boom" },
+      ]);
+
+    const result = await loop(
+      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { spawn },
+    );
+
+    expect(result.iterations[0]?.stdout).toBe("partial\n[error] boom\n");
+  });
+
   it("surfaces durationMs and token usage from the spawner", async () => {
     const spawn: Spawner = () =>
       fakeProcess({

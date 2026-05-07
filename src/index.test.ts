@@ -7,16 +7,27 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { loop, type Spawner } from "./index.js";
 
-async function* textEvents(chunks: string[]): AsyncGenerator<CliEvent> {
-  for (const content of chunks) {
-    yield { type: "text", timestamp: 0, content, raw: content };
+async function* cliEvents(events: CliEvent[]): AsyncGenerator<CliEvent> {
+  for (const event of events) {
+    yield event;
   }
 }
 
+function textEvent(content: string): CliEvent {
+  return { type: "text", timestamp: 0, content, raw: content };
+}
+
 function fakeProcess(result: CliResult, chunks: string[] = []): CliProcess {
+  return fakeProcessWithEvents(result, chunks.map(textEvent));
+}
+
+function fakeProcessWithEvents(
+  result: CliResult,
+  events: CliEvent[],
+): CliProcess {
   return {
     pid: 1,
-    events: textEvents(chunks),
+    events: cliEvents(events),
     interrupt: async () => result,
     done: Promise.resolve(result),
   };
@@ -95,9 +106,9 @@ describe("loop", () => {
     expect(result.iterations[0]?.sentinelDetected).toBe(true);
   });
 
-  it("invokes onOutput with each text chunk, appending a newline when missing", async () => {
+  it("invokes onOutput with each text chunk exactly as received", async () => {
     const spawn: Spawner = () =>
-      fakeProcess(okResult(), ["hello", "world\n", "!"]);
+      fakeProcess(okResult(), ["hel", "lo\n", "world"]);
     const received: string[] = [];
 
     await loop(
@@ -111,18 +122,68 @@ describe("loop", () => {
       { spawn },
     );
 
-    expect(received).toEqual(["hello\n", "world\n", "!\n"]);
+    expect(received).toEqual(["hel", "lo\n", "world"]);
   });
 
-  it("captures per-iteration stdout with one line per event", async () => {
-    const spawn: Spawner = () => fakeProcess(okResult(), ["alpha", "beta"]);
+  it("captures streamed text without adding newlines between chunks", async () => {
+    const spawn: Spawner = () =>
+      fakeProcess(okResult(), ["/home", "/t", "iby"]);
+
+    const result = await loop(
+      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { spawn },
+    );
+
+    expect(result.iterations[0]?.stdout).toBe("/home/tiby");
+  });
+
+  it("detects sentinel split across streamed text chunks", async () => {
+    const spawn: Spawner = () =>
+      fakeProcess(okResult(), ["work ", ":::LO", "OPER_DONE", ":::"]);
+
+    const result = await loop(
+      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 2 },
+      { spawn },
+    );
+
+    expect(result.stopReason).toBe("sentinel");
+  });
+
+  it("keeps error events line-oriented in stdout", async () => {
+    const spawn: Spawner = () =>
+      fakeProcessWithEvents(okResult(), [
+        { type: "error", timestamp: 0, content: "boom", raw: "boom" },
+        {
+          type: "tool_result",
+          timestamp: 0,
+          toolResult: { name: "bash", error: "failed" },
+          raw: "failed",
+        },
+      ]);
 
     const result = await loop(
       { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
       { spawn },
     );
 
-    expect(result.iterations[0]?.stdout).toBe("alpha\nbeta\n");
+    expect(result.iterations[0]?.stdout).toBe(
+      "[error] boom\n[tool bash error] failed\n",
+    );
+  });
+
+  it("separates line-oriented events from preceding raw text chunks", async () => {
+    const spawn: Spawner = () =>
+      fakeProcessWithEvents(okResult(), [
+        textEvent("partial"),
+        { type: "error", timestamp: 0, content: "boom", raw: "boom" },
+      ]);
+
+    const result = await loop(
+      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { spawn },
+    );
+
+    expect(result.iterations[0]?.stdout).toBe("partial\n[error] boom\n");
   });
 
   it("surfaces durationMs and token usage from the spawner", async () => {

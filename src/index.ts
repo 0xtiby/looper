@@ -7,17 +7,35 @@ import type {
 import { spawn as spawnCli } from "@0xtiby/spawner";
 import { substitute } from "./template.js";
 
-function textForEvent(event: CliEvent): string | null {
+type TranscriptChunk =
+  | { type: "raw"; text: string }
+  | { type: "line"; text: string };
+
+function transcriptChunkForEvent(event: CliEvent): TranscriptChunk | null {
   if (event.type === "text" && typeof event.content === "string") {
-    return event.content;
+    return { type: "raw", text: event.content };
   }
   if (event.type === "error" && typeof event.content === "string") {
-    return `[error] ${event.content}`;
+    return { type: "line", text: `[error] ${event.content}` };
   }
   if (event.type === "tool_result" && event.toolResult?.error) {
-    return `[tool ${event.toolResult.name} error] ${event.toolResult.error}`;
+    return {
+      type: "line",
+      text: `[tool ${event.toolResult.name} error] ${event.toolResult.error}`,
+    };
   }
   return null;
+}
+
+function appendTranscriptChunk(stdout: string, chunk: TranscriptChunk): string {
+  if (chunk.type === "raw") return chunk.text;
+  return lineChunk(stdout, chunk.text);
+}
+
+function lineChunk(stdout: string, text: string): string {
+  const prefix = stdout.length > 0 && !stdout.endsWith("\n") ? "\n" : "";
+  const suffix = text.endsWith("\n") ? "" : "\n";
+  return `${prefix}${text}${suffix}`;
 }
 
 export type StopReason = "sentinel" | "max_iterations" | "error" | "aborted";
@@ -156,9 +174,9 @@ async function runIteration(
     let stdout = "";
     let sentinelDetected = false;
     for await (const event of proc.events) {
-      const text = textForEvent(event);
-      if (text === null) continue;
-      const chunk = text.endsWith("\n") ? text : `${text}\n`;
+      const transcriptChunk = transcriptChunkForEvent(event);
+      if (transcriptChunk === null) continue;
+      const chunk = appendTranscriptChunk(stdout, transcriptChunk);
       stdout += chunk;
       ctx.onOutput?.(chunk);
       if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
@@ -174,7 +192,7 @@ async function runIteration(
         }
       : null;
     if (error && !stdout.includes(error.message)) {
-      const line = `[${error.code}] ${error.message}\n`;
+      const line = lineChunk(stdout, `[${error.code}] ${error.message}`);
       stdout += line;
       ctx.onOutput?.(line);
     }

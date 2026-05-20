@@ -1,10 +1,15 @@
 packages:
   - "."
 allowBuilds:
+  '@google/genai': true
   esbuild: true
   koffi: true
   protobufjs: true
 minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core@0.75.4'
+  - '@earendil-works/pi-ai@0.75.4'
+  - '@earendil-works/pi-coding-agent@0.75.4'
+  - '@earendil-works/pi-tui@0.75.4'
   - '@j178/prek-android-arm64@0.4.1'
   - '@j178/prek-darwin-arm64@0.4.1'
   - '@j178/prek-darwin-x64@0.4.1'

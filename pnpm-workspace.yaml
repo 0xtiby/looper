@@ -1,2 +1,39 @@
 packages:
   - "."
+allowBuilds:
+  '@google/genai': true
+  esbuild: true
+  koffi: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core@0.75.4'
+  - '@earendil-works/pi-ai@0.75.4'
+  - '@earendil-works/pi-coding-agent@0.75.4'
+  - '@earendil-works/pi-tui@0.75.4'
+  - '@j178/prek-android-arm64@0.4.1'
+  - '@j178/prek-darwin-arm64@0.4.1'
+  - '@j178/prek-darwin-x64@0.4.1'
+  - '@j178/prek-linux-arm-gnueabihf@0.4.1'
+  - '@j178/prek-linux-arm-musleabihf@0.4.1'
+  - '@j178/prek-linux-arm64-gnu@0.4.1'
+  - '@j178/prek-linux-arm64-musl@0.4.1'
+  - '@j178/prek-linux-armv7-musleabihf@0.4.1'
+  - '@j178/prek-linux-ia32-gnu@0.4.1'
+  - '@j178/prek-linux-ia32-musl@0.4.1'
+  - '@j178/prek-linux-riscv64-gnu@0.4.1'
+  - '@j178/prek-linux-s390x-gnu@0.4.1'
+  - '@j178/prek-linux-x64-gnu@0.4.1'
+  - '@j178/prek-linux-x64-musl@0.4.1'
+  - '@j178/prek-win32-arm64-msvc@0.4.1'
+  - '@j178/prek-win32-ia32-msvc@0.4.1'
+  - '@j178/prek-win32-x64-msvc@0.4.1'
+  - '@j178/prek@0.4.1'
+  - '@types/node@25.9.1'
+  - '@vitest/expect@4.1.7'
+  - '@vitest/mocker@4.1.7'
+  - '@vitest/pretty-format@4.1.7'
+  - '@vitest/runner@4.1.7'
+  - '@vitest/snapshot@4.1.7'
+  - '@vitest/spy@4.1.7'
+  - '@vitest/utils@4.1.7'
+  - vitest@4.1.7

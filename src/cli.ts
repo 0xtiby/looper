@@ -1,22 +1,31 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { CliName } from "@0xtiby/spawner";
+import { createInterface } from "node:readline";
 import { Command, InvalidArgumentError, Option } from "commander";
 import {
   discoverAcpAgents,
   formatAgentListingJson,
   formatAgentListingText,
+  type ListedAgent,
   listAgents,
 } from "./agents.js";
 import {
+  type AgentId,
+  AgentIdSchema,
   applyOverrides,
-  CliNameSchema,
+  DEFAULT_CONFIG,
   loadConfig,
   resolveConfig,
-  writeDefaultConfig,
+  writeConfig,
 } from "./config.js";
 import { type LoopResult, loop } from "./index.js";
+import {
+  IncompatibleAgentError,
+  NonInteractiveInitError,
+  resolveInitAgent,
+  UnknownAgentError,
+} from "./init.js";
 import {
   finalizeRun,
   type IterationRecord,
@@ -29,12 +38,12 @@ import {
 } from "./run.js";
 import { loadPrompt } from "./template.js";
 
-const SUPPORTED_AGENTS: CliName[] = [...CliNameSchema.options];
+const SUPPORTED_AGENTS: AgentId[] = [...AgentIdSchema.options];
 
 interface RunCommandOptions {
   prompt?: string;
   promptStdin?: boolean;
-  agent?: CliName;
+  agent?: AgentId;
   model?: string;
   maxIterations?: number;
   sentinel?: string;
@@ -61,6 +70,31 @@ function collectVar(
   const key = value.slice(0, eq);
   const val = value.slice(eq + 1);
   return { ...previous, [key]: val };
+}
+
+async function ttySelectAgent(agents: ListedAgent[]): Promise<AgentId> {
+  return new Promise((resolve, reject) => {
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    console.log("Compatible agents:");
+    agents.forEach((agent, i) => {
+      console.log(`  ${i + 1}. ${agent.displayName} (${agent.id})`);
+    });
+
+    rl.question(`Select an agent (1-${agents.length}): `, (answer) => {
+      rl.close();
+      const index = Number.parseInt(answer, 10) - 1;
+      const selected = agents[index];
+      if (selected) {
+        resolve(AgentIdSchema.parse(selected.id));
+      } else {
+        reject(new Error("Invalid selection"));
+      }
+    });
+  });
 }
 
 function formatTranscript(result: LoopResult): string {
@@ -178,7 +212,7 @@ program
 
     const fileConfig = await loadConfig(hostCwd);
     const resolved = applyOverrides(resolveConfig(fileConfig), {
-      cli: options.agent,
+      agent: options.agent,
       model: options.model,
       maxIterations: options.maxIterations,
       sentinel: options.sentinel,
@@ -196,7 +230,7 @@ program
     const run = newActiveRun({
       id: runId,
       prompt: describePromptSource(options),
-      agent: resolved.cli,
+      agent: resolved.agent,
       model: resolved.model,
       maxIterations: resolved.maxIterations,
       vars,
@@ -210,7 +244,7 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        agent: resolved.cli,
+        agent: resolved.agent,
         prompt,
         cwd: spawnerCwd,
         model: resolveModel(resolved.model),
@@ -316,12 +350,48 @@ program
 
 program
   .command("init")
-  .description("Write a default .looper/config.json (no overwrite)")
-  .action(async () => {
+  .description("Initialize .looper/config.json with a configured agent")
+  .addOption(
+    new Option(
+      "--agent <id>",
+      "Agent id to set as default (non-interactive)",
+    ).choices(SUPPORTED_AGENTS),
+  )
+  .action(async (options: { agent?: AgentId }) => {
+    const cwd = process.cwd();
+
+    const existing = await loadConfig(cwd);
+    if (existing !== null) {
+      console.error("Config file already exists");
+      process.exit(1);
+    }
+
     try {
-      const file = await writeDefaultConfig(process.cwd());
+      const agent = await resolveInitAgent({
+        agent: options.agent,
+        deps: {
+          isTty: process.stdin.isTTY === true,
+          listAgents: async () => listAgents(discoverAcpAgents),
+          selectAgent: ttySelectAgent,
+        },
+      });
+      const file = await writeConfig(cwd, {
+        agent,
+        model: DEFAULT_CONFIG.model,
+        maxIterations: DEFAULT_CONFIG.maxIterations,
+        sentinel: DEFAULT_CONFIG.sentinel,
+        vars: DEFAULT_CONFIG.vars,
+      });
       console.log(`Wrote ${file}`);
     } catch (err) {
+      if (
+        err instanceof IncompatibleAgentError ||
+        err instanceof NonInteractiveInitError ||
+        err instanceof UnknownAgentError
+      ) {
+        console.error(err.message);
+        process.exit(1);
+      }
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }

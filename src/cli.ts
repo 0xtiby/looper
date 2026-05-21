@@ -27,6 +27,13 @@ import {
   UnknownAgentError,
 } from "./init.js";
 import {
+  MissingAgentError,
+  IncompatibleAgentError as PreflightIncompatibleAgentError,
+  preflight,
+  UnavailableAgentError,
+  UnsupportedModelError,
+} from "./preflight.js";
+import {
   finalizeRun,
   type IterationRecord,
   listInterruptedRuns,
@@ -217,6 +224,23 @@ program
       maxIterations: options.maxIterations,
       sentinel: options.sentinel,
     });
+
+    try {
+      await preflight(resolved.agent, resolved.model, {
+        discoverAgents: discoverAcpAgents,
+      });
+    } catch (err) {
+      if (
+        err instanceof MissingAgentError ||
+        err instanceof UnavailableAgentError ||
+        err instanceof PreflightIncompatibleAgentError ||
+        err instanceof UnsupportedModelError
+      ) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      throw err;
+    }
 
     const prompt = await loadPrompt({
       value: options.prompt,

@@ -19,6 +19,7 @@ function agent(overrides: Partial<AcpAgent> & Pick<AcpAgent, "id">): AcpAgent {
     status: overrides.status ?? "available",
     isAfkSafe: overrides.isAfkSafe ?? true,
     capabilitySummary: overrides.capabilitySummary ?? "Runs unattended",
+    supportedModels: overrides.supportedModels ?? ["default"],
     acpMetadata: overrides.acpMetadata ?? {},
   };
 }

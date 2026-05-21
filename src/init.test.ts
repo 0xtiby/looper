@@ -16,6 +16,7 @@ function listedAgent(
     status: overrides.status ?? "available",
     compatibility: overrides.compatibility ?? "compatible",
     capabilitySummary: overrides.capabilitySummary ?? "Runs unattended",
+    supportedModels: overrides.supportedModels ?? ["default"],
     acpMetadata: overrides.acpMetadata ?? {},
   };
 }

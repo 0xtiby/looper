@@ -9,6 +9,7 @@ export interface AcpAgent {
   status: AgentStatus;
   isAfkSafe: boolean;
   capabilitySummary: string;
+  supportedModels: string[];
   acpMetadata: Record<string, unknown>;
 }
 
@@ -18,6 +19,7 @@ export interface ListedAgent {
   status: AgentStatus;
   compatibility: AgentCompatibility;
   capabilitySummary: string;
+  supportedModels: string[];
   acpMetadata: Record<string, unknown>;
 }
 
@@ -28,6 +30,7 @@ interface SupportedAcpAgent {
   displayName: string;
   isAfkSafe: boolean;
   capabilitySummary: string;
+  supportedModels: string[];
 }
 
 const SUPPORTED_ACP_AGENTS: SupportedAcpAgent[] = [
@@ -36,24 +39,28 @@ const SUPPORTED_ACP_AGENTS: SupportedAcpAgent[] = [
     displayName: "Claude Code",
     isAfkSafe: true,
     capabilitySummary: "AFK-safe coding Agent with permission bypass support",
+    supportedModels: ["default", "sonnet", "opus", "haiku"],
   },
   {
     id: "codex",
     displayName: "Codex CLI",
     isAfkSafe: true,
     capabilitySummary: "AFK-safe coding Agent with sandbox bypass support",
+    supportedModels: ["default", "o3", "o4-mini", "gpt-4o"],
   },
   {
     id: "opencode",
     displayName: "OpenCode",
     isAfkSafe: false,
     capabilitySummary: "Visible Agent; approval bypass is not available",
+    supportedModels: ["default", "gpt-4o", "claude-sonnet"],
   },
   {
     id: "pi",
     displayName: "Pi",
     isAfkSafe: true,
     capabilitySummary: "Headless coding Agent in JSON mode",
+    supportedModels: ["default", "pi-v1"],
   },
 ];
 
@@ -96,6 +103,7 @@ function toAcpAgent(
     status: detection.installed ? "available" : "unavailable",
     isAfkSafe: agent.isAfkSafe,
     capabilitySummary: agent.capabilitySummary,
+    supportedModels: agent.supportedModels,
     acpMetadata: {
       protocol: "acp",
       source: "@0xtiby/spawner",
@@ -112,6 +120,7 @@ function toListedAgent(agent: AcpAgent): ListedAgent {
     status: agent.status,
     compatibility: agent.isAfkSafe ? "compatible" : "incompatible",
     capabilitySummary: agent.capabilitySummary,
+    supportedModels: agent.supportedModels,
     acpMetadata: agent.acpMetadata,
   };
 }

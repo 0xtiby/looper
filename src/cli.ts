@@ -4,6 +4,12 @@ import path from "node:path";
 import type { CliName } from "@0xtiby/spawner";
 import { Command, InvalidArgumentError, Option } from "commander";
 import {
+  discoverAcpAgents,
+  formatAgentListingJson,
+  formatAgentListingText,
+  listAgents,
+} from "./agents.js";
+import {
   applyOverrides,
   CliNameSchema,
   loadConfig,
@@ -128,6 +134,19 @@ program
   .name("looper")
   .description("Standalone AI loop orchestration engine")
   .version("0.0.0");
+
+program
+  .command("agents")
+  .description("List discovered ACP Agents")
+  .option("--json", "print detailed Agent metadata as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const agents = await listAgents(discoverAcpAgents);
+    if (options.json) {
+      process.stdout.write(formatAgentListingJson(agents));
+      return;
+    }
+    console.log(formatAgentListingText(agents));
+  });
 
 program
   .command("run")

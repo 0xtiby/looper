@@ -1,7 +1,8 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { CliNameSchema } from "./config.js";
+
+export const AgentIdSchema = z.enum(["claude", "codex", "opencode", "pi"]);
 
 export const IterationErrorSchema = z.object({
   code: z.string(),
@@ -21,51 +22,47 @@ export const IterationRecordSchema = z.object({
 
 export type IterationRecord = z.infer<typeof IterationRecordSchema>;
 
-export const SessionStateSchema = z.enum([
-  "active",
-  "completed",
-  "interrupted",
-]);
-export type SessionState = z.infer<typeof SessionStateSchema>;
+export const RunStateSchema = z.enum(["active", "completed", "interrupted"]);
+export type RunState = z.infer<typeof RunStateSchema>;
 
-export const SessionStopReasonSchema = z.enum([
+export const RunStopReasonSchema = z.enum([
   "sentinel",
   "max_iterations",
   "error",
   "aborted",
 ]);
-export type SessionStopReason = z.infer<typeof SessionStopReasonSchema>;
+export type RunStopReason = z.infer<typeof RunStopReasonSchema>;
 
-export const SessionSchema = z.object({
+export const RunSchema = z.object({
   id: z.string().min(1),
   prompt: z.string(),
-  cli: CliNameSchema,
+  agent: AgentIdSchema,
   model: z.string().nullable(),
   maxIterations: z.number().int().positive(),
   vars: z.record(z.string(), z.string()).default({}),
-  state: SessionStateSchema,
+  state: RunStateSchema,
   startedAt: z.string(),
   completedAt: z.string().nullable(),
-  stopReason: SessionStopReasonSchema.nullable(),
+  stopReason: RunStopReasonSchema.nullable(),
   iterations: z.array(IterationRecordSchema),
 });
 
-export type Session = z.infer<typeof SessionSchema>;
+export type Run = z.infer<typeof RunSchema>;
 
-export interface NewSessionInput {
+export interface NewRunInput {
   id: string;
   prompt: string;
-  cli: z.infer<typeof CliNameSchema>;
+  agent: z.infer<typeof AgentIdSchema>;
   model: string | null;
   maxIterations: number;
   vars?: Record<string, string>;
 }
 
-export function newActiveSession(input: NewSessionInput): Session {
+export function newActiveRun(input: NewRunInput): Run {
   return {
     id: input.id,
     prompt: input.prompt,
-    cli: input.cli,
+    agent: input.agent,
     model: input.model,
     maxIterations: input.maxIterations,
     vars: input.vars ?? {},
@@ -77,13 +74,13 @@ export function newActiveSession(input: NewSessionInput): Session {
   };
 }
 
-export function finalizeSession(
-  session: Session,
-  stopReason: SessionStopReason,
+export function finalizeRun(
+  run: Run,
+  stopReason: RunStopReason,
   iterations: IterationRecord[],
-): Session {
+): Run {
   return {
-    ...session,
+    ...run,
     state: stopReason === "aborted" ? "interrupted" : "completed",
     completedAt: new Date().toISOString(),
     stopReason,
@@ -93,11 +90,9 @@ export function finalizeSession(
 
 const SHORT_ID_LENGTH = 8;
 
-export function sessionBasename(
-  session: Pick<Session, "id" | "startedAt">,
-): string {
-  const shortId = session.id.slice(0, SHORT_ID_LENGTH);
-  const ts = session.startedAt
+export function runBasename(run: Pick<Run, "id" | "startedAt">): string {
+  const shortId = run.id.slice(0, SHORT_ID_LENGTH);
+  const ts = run.startedAt
     .replace(/\.\d+Z$/, "")
     .replace(/Z$/, "")
     .replace(/:/g, "-")
@@ -105,22 +100,16 @@ export function sessionBasename(
   return `${shortId}_${ts}`;
 }
 
-export async function writeSession(
-  session: Session,
-  cwd: string,
-): Promise<string> {
-  const dir = path.join(cwd, ".looper", "sessions");
+export async function writeRun(run: Run, cwd: string): Promise<string> {
+  const dir = path.join(cwd, ".looper", "runs");
   await mkdir(dir, { recursive: true });
-  const file = path.join(dir, `${sessionBasename(session)}.json`);
-  await writeFile(file, `${JSON.stringify(session, null, 2)}\n`, "utf8");
+  const file = path.join(dir, `${runBasename(run)}.json`);
+  await writeFile(file, `${JSON.stringify(run, null, 2)}\n`, "utf8");
   return file;
 }
 
-export async function readSession(
-  cwd: string,
-  id: string,
-): Promise<Session | null> {
-  const dir = path.join(cwd, ".looper", "sessions");
+export async function readRun(cwd: string, id: string): Promise<Run | null> {
+  const dir = path.join(cwd, ".looper", "runs");
   let files: string[];
   try {
     files = await readdir(dir);
@@ -138,11 +127,11 @@ export async function readSession(
   );
   if (!match) return null;
   const raw = await readFile(path.join(dir, match), "utf8");
-  return SessionSchema.parse(JSON.parse(raw));
+  return RunSchema.parse(JSON.parse(raw));
 }
 
-export async function listInterruptedSessions(cwd: string): Promise<Session[]> {
-  const dir = path.join(cwd, ".looper", "sessions");
+export async function listInterruptedRuns(cwd: string): Promise<Run[]> {
+  const dir = path.join(cwd, ".looper", "runs");
   let files: string[];
   try {
     files = await readdir(dir);
@@ -150,16 +139,16 @@ export async function listInterruptedSessions(cwd: string): Promise<Session[]> {
     if (isFileNotFound(err)) return [];
     throw err;
   }
-  const sessions: Session[] = [];
+  const runs: Run[] = [];
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
     const raw = await readFile(path.join(dir, f), "utf8");
-    const parsed = SessionSchema.safeParse(JSON.parse(raw));
+    const parsed = RunSchema.safeParse(JSON.parse(raw));
     if (parsed.success && parsed.data.state === "interrupted") {
-      sessions.push(parsed.data);
+      runs.push(parsed.data);
     }
   }
-  return sessions;
+  return runs;
 }
 
 function isFileNotFound(err: unknown): boolean {

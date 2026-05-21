@@ -64,14 +64,14 @@ export interface LoopResult {
 }
 
 export interface LoopOptions {
-  cli: CliName;
+  agent: CliName;
   prompt: string;
   cwd: string;
   model?: string;
   maxIterations?: number;
   sentinel?: string;
   vars?: Record<string, string>;
-  sessionId?: string;
+  runId?: string;
   signal?: AbortSignal;
   startIteration?: number;
   autoApprove?: boolean;
@@ -103,12 +103,12 @@ export async function loop(
     }
     const prompt = substitute(
       options.prompt,
-      buildVars(number, maxIterations, options.sessionId, options.vars),
+      buildVars(number, maxIterations, options.runId, options.vars),
     );
     const iteration = await runIteration(
       spawnFn,
       {
-        cli: options.cli,
+        cli: options.agent,
         prompt,
         cwd: options.cwd,
         model: options.model,
@@ -145,14 +145,14 @@ interface IterationContext {
 function buildVars(
   iteration: number,
   maxIterations: number,
-  sessionId: string | undefined,
+  runId: string | undefined,
   userVars: Record<string, string> | undefined,
 ): Record<string, string> {
   const builtIns: Record<string, string> = {
     ITERATION: String(iteration),
     MAX_ITERATIONS: String(maxIterations),
   };
-  if (sessionId !== undefined) builtIns.SESSION_ID = sessionId;
+  if (runId !== undefined) builtIns.RUN_ID = runId;
   return { ...builtIns, ...(userVars ?? {}) };
 }
 
@@ -172,6 +172,7 @@ async function runIteration(
   }
   try {
     let stdout = "";
+    let assistantText = "";
     let sentinelDetected = false;
     for await (const event of proc.events) {
       const transcriptChunk = transcriptChunkForEvent(event);
@@ -179,8 +180,11 @@ async function runIteration(
       const chunk = appendTranscriptChunk(stdout, transcriptChunk);
       stdout += chunk;
       ctx.onOutput?.(chunk);
-      if (!sentinelDetected && stdout.includes(ctx.sentinel)) {
-        sentinelDetected = true;
+      if (event.type === "text") {
+        assistantText += event.content ?? "";
+        if (!sentinelDetected && assistantText.includes(ctx.sentinel)) {
+          sentinelDetected = true;
+        }
       }
     }
     const result = await proc.done;

@@ -45,13 +45,13 @@ function okResult(): CliResult {
 }
 
 describe("loop", () => {
-  it("spawns the CLI with the given prompt, cli, and cwd", async () => {
+  it("spawns the CLI with the given prompt, agent, and cwd", async () => {
     const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
       fakeProcess(okResult()),
     );
 
     await loop(
-      { cli: "claude", prompt: "do the thing", cwd: "/work" },
+      { agent: "claude", prompt: "do the thing", cwd: "/work" },
       { spawn },
     );
 
@@ -70,7 +70,7 @@ describe("loop", () => {
     );
 
     const result = await loop(
-      { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 3 },
+      { agent: "claude", prompt: "x", cwd: "/w", maxIterations: 3 },
       { spawn },
     );
 
@@ -80,7 +80,7 @@ describe("loop", () => {
     expect(result.stopReason).toBe("max_iterations");
   });
 
-  it("stops with stopReason 'sentinel' when sentinel appears in CLI output", async () => {
+  it("stops with stopReason 'sentinel' when sentinel appears in assistant text", async () => {
     const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
       fakeProcess(okResult(), [
         "working...",
@@ -91,7 +91,7 @@ describe("loop", () => {
 
     const result = await loop(
       {
-        cli: "claude",
+        agent: "claude",
         prompt: "x",
         cwd: "/w",
         maxIterations: 5,
@@ -113,7 +113,7 @@ describe("loop", () => {
 
     await loop(
       {
-        cli: "claude",
+        agent: "claude",
         prompt: "x",
         cwd: "/w",
         maxIterations: 1,
@@ -130,7 +130,7 @@ describe("loop", () => {
       fakeProcess(okResult(), ["/home", "/t", "iby"]);
 
     const result = await loop(
-      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { agent: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
       { spawn },
     );
 
@@ -142,7 +142,7 @@ describe("loop", () => {
       fakeProcess(okResult(), ["work ", ":::LO", "OPER_DONE", ":::"]);
 
     const result = await loop(
-      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 2 },
+      { agent: "pi", prompt: "x", cwd: "/w", maxIterations: 2 },
       { spawn },
     );
 
@@ -162,7 +162,7 @@ describe("loop", () => {
       ]);
 
     const result = await loop(
-      { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { agent: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
       { spawn },
     );
 
@@ -179,7 +179,7 @@ describe("loop", () => {
       ]);
 
     const result = await loop(
-      { cli: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { agent: "pi", prompt: "x", cwd: "/w", maxIterations: 1 },
       { spawn },
     );
 
@@ -200,7 +200,7 @@ describe("loop", () => {
       });
 
     const result = await loop(
-      { cli: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { agent: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
       { spawn },
     );
 
@@ -218,7 +218,7 @@ describe("loop", () => {
 
     await loop(
       {
-        cli: "claude",
+        agent: "claude",
         prompt: "i={{ITERATION}}/{{MAX_ITERATIONS}}",
         cwd: "/w",
         maxIterations: 3,
@@ -231,6 +231,25 @@ describe("loop", () => {
     expect(spawn.mock.calls[2]?.[0].prompt).toBe("i=3/3");
   });
 
+  it("substitutes built-in RUN_ID when runId is provided", async () => {
+    const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
+      fakeProcess(okResult()),
+    );
+
+    await loop(
+      {
+        agent: "claude",
+        prompt: "run={{RUN_ID}}",
+        cwd: "/w",
+        maxIterations: 1,
+        runId: "abc-123",
+      },
+      { spawn },
+    );
+
+    expect(spawn.mock.calls[0]?.[0].prompt).toBe("run=abc-123");
+  });
+
   it("applies user vars, letting them override built-ins", async () => {
     const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
       fakeProcess(okResult()),
@@ -238,7 +257,7 @@ describe("loop", () => {
 
     await loop(
       {
-        cli: "claude",
+        agent: "claude",
         prompt: "it={{ITERATION}} mode={{MODE}}",
         cwd: "/w",
         maxIterations: 1,
@@ -272,7 +291,7 @@ describe("loop", () => {
 
     const result = await loop(
       {
-        cli: "claude",
+        agent: "claude",
         prompt: "x",
         cwd: "/w",
         maxIterations: 3,
@@ -293,7 +312,7 @@ describe("loop", () => {
 
     const result = await loop(
       {
-        cli: "claude",
+        agent: "claude",
         prompt: "i={{ITERATION}}",
         cwd: "/w",
         maxIterations: 4,
@@ -307,12 +326,39 @@ describe("loop", () => {
     expect(spawn.mock.calls[1]?.[0].prompt).toBe("i=4");
   });
 
+  it("does not stop on sentinel inside tool_result or error events", async () => {
+    const spawn: Spawner = () =>
+      fakeProcessWithEvents(okResult(), [
+        {
+          type: "tool_result",
+          timestamp: 0,
+          toolResult: { name: "bash", output: ":::LOOPER_DONE:::" },
+          raw: "tool",
+        },
+        {
+          type: "error",
+          timestamp: 0,
+          content: ":::LOOPER_DONE:::",
+          raw: "err",
+        },
+        textEvent("done"),
+      ]);
+
+    const result = await loop(
+      { agent: "claude", prompt: "x", cwd: "/w", maxIterations: 1 },
+      { spawn },
+    );
+
+    expect(result.stopReason).toBe("max_iterations");
+    expect(result.iterations[0]?.sentinelDetected).toBe(false);
+  });
+
   it("reports stopReason 'error' when the CLI exits non-zero", async () => {
     const failing: CliResult = { ...okResult(), exitCode: 2 };
     const spawn: Spawner = () => fakeProcess(failing);
 
     const result = await loop(
-      { cli: "claude", prompt: "x", cwd: "/work" },
+      { agent: "claude", prompt: "x", cwd: "/work" },
       { spawn },
     );
 

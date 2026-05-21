@@ -18,23 +18,23 @@ import {
 } from "./config.js";
 import { type LoopResult, loop } from "./index.js";
 import {
-  finalizeSession,
+  finalizeRun,
   type IterationRecord,
-  listInterruptedSessions,
-  newActiveSession,
-  readSession,
-  type Session,
-  sessionBasename,
-  writeSession,
-} from "./session.js";
+  listInterruptedRuns,
+  newActiveRun,
+  type Run,
+  readRun,
+  runBasename,
+  writeRun,
+} from "./run.js";
 import { loadPrompt } from "./template.js";
 
-const SUPPORTED_CLIS: CliName[] = [...CliNameSchema.options];
+const SUPPORTED_AGENTS: CliName[] = [...CliNameSchema.options];
 
 interface RunCommandOptions {
   prompt?: string;
   promptStdin?: boolean;
-  cli?: CliName;
+  agent?: CliName;
   model?: string;
   maxIterations?: number;
   sentinel?: string;
@@ -81,14 +81,14 @@ function formatTranscript(result: LoopResult): string {
 }
 
 async function persistTranscript(
-  session: Pick<Session, "id" | "startedAt">,
+  run: Pick<Run, "id" | "startedAt">,
   result: LoopResult,
   cwd: string,
   mode: "write" | "append",
 ): Promise<void> {
-  const sessionsDir = path.join(cwd, ".looper", "sessions");
-  await mkdir(sessionsDir, { recursive: true });
-  const logPath = path.join(sessionsDir, `${sessionBasename(session)}.log`);
+  const runsDir = path.join(cwd, ".looper", "runs");
+  await mkdir(runsDir, { recursive: true });
+  const logPath = path.join(runsDir, `${runBasename(run)}.log`);
   const body = formatTranscript(result);
   if (mode === "append") {
     await appendFile(logPath, body, "utf8");
@@ -150,11 +150,11 @@ program
 
 program
   .command("run")
-  .description("Run the loop against an AI CLI")
+  .description("Run the loop against an AI Agent")
   .option("-p, --prompt <value>", "inline string or path to a prompt file")
   .option("--prompt-stdin", "read the prompt from stdin")
   .addOption(
-    new Option("--cli <name>", "AI CLI to spawn").choices(SUPPORTED_CLIS),
+    new Option("--agent <id>", "Agent id to run").choices(SUPPORTED_AGENTS),
   )
   .option("--model <name>", "model override")
   .option(
@@ -163,7 +163,7 @@ program
     parsePositiveInt,
   )
   .option("--sentinel <string>", "string that marks loop completion in output")
-  .option("--cwd <path>", "working directory for the spawned CLI")
+  .option("--cwd <path>", "working directory for the spawned Agent")
   .option("--var <KEY=VALUE>", "template variable (repeatable)", collectVar)
   .action(async (options: RunCommandOptions) => {
     if (!options.prompt && !options.promptStdin) {
@@ -178,7 +178,7 @@ program
 
     const fileConfig = await loadConfig(hostCwd);
     const resolved = applyOverrides(resolveConfig(fileConfig), {
-      cli: options.cli,
+      cli: options.agent,
       model: options.model,
       maxIterations: options.maxIterations,
       sentinel: options.sentinel,
@@ -192,16 +192,16 @@ program
 
     const vars = { ...resolved.vars, ...(options.var ?? {}) };
 
-    const sessionId = randomUUID();
-    const session = newActiveSession({
-      id: sessionId,
+    const runId = randomUUID();
+    const run = newActiveRun({
+      id: runId,
       prompt: describePromptSource(options),
-      cli: resolved.cli,
+      agent: resolved.cli,
       model: resolved.model,
       maxIterations: resolved.maxIterations,
       vars,
     });
-    await writeSession(session, hostCwd);
+    await writeRun(run, hostCwd);
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -210,14 +210,14 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        cli: resolved.cli,
+        agent: resolved.cli,
         prompt,
         cwd: spawnerCwd,
         model: resolveModel(resolved.model),
         maxIterations: resolved.maxIterations,
         sentinel: resolved.sentinel,
         vars,
-        sessionId,
+        runId,
         signal: controller.signal,
         onOutput: (chunk) => {
           process.stdout.write(chunk);
@@ -227,60 +227,58 @@ program
       process.off("SIGINT", onSigint);
     }
 
-    const finalized = finalizeSession(
-      session,
+    const finalized = finalizeRun(
+      run,
       result.stopReason,
       toIterationRecords(result),
     );
-    await writeSession(finalized, hostCwd);
-    await persistTranscript(session, result, hostCwd, "write");
+    await writeRun(finalized, hostCwd);
+    await persistTranscript(run, result, hostCwd, "write");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);
   });
 
 program
-  .command("resume [session-id]")
-  .description("Resume an interrupted session (or list them with no id)")
-  .action(async (sessionId?: string) => {
+  .command("resume [run-id]")
+  .description("Resume an interrupted run (or list them with no id)")
+  .action(async (runId?: string) => {
     const cwd = process.cwd();
 
-    if (!sessionId) {
-      const sessions = await listInterruptedSessions(cwd);
-      if (sessions.length === 0) {
-        console.log("No interrupted sessions.");
+    if (!runId) {
+      const runs = await listInterruptedRuns(cwd);
+      if (runs.length === 0) {
+        console.log("No interrupted runs.");
         return;
       }
-      for (const s of sessions) {
+      for (const r of runs) {
         const preview =
-          s.prompt.length > 60 ? `${s.prompt.slice(0, 60)}…` : s.prompt;
-        const shortId = s.id.slice(0, 8);
+          r.prompt.length > 60 ? `${r.prompt.slice(0, 60)}…` : r.prompt;
+        const shortId = r.id.slice(0, 8);
         console.log(
-          `${shortId}  ${s.startedAt}  (${s.iterations.length} done)  ${preview}`,
+          `${shortId}  ${r.startedAt}  (${r.iterations.length} done)  ${preview}`,
         );
       }
       return;
     }
 
-    const session = await readSession(cwd, sessionId);
-    if (!session) {
-      console.error(`Session ${sessionId} not found`);
+    const run = await readRun(cwd, runId);
+    if (!run) {
+      console.error(`Run ${runId} not found`);
       process.exit(1);
     }
-    if (session.state !== "interrupted") {
-      console.error(
-        `Session ${sessionId} is ${session.state}, not interrupted`,
-      );
+    if (run.state !== "interrupted") {
+      console.error(`Run ${runId} is ${run.state}, not interrupted`);
       process.exit(1);
     }
-    if (session.prompt === "<stdin>") {
-      console.error("Cannot resume sessions whose prompt came from stdin");
+    if (run.prompt === "<stdin>") {
+      console.error("Cannot resume runs whose prompt came from stdin");
       process.exit(1);
     }
 
     const fileConfig = await loadConfig(cwd);
     const resolved = resolveConfig(fileConfig);
-    const prompt = await loadPrompt({ value: session.prompt });
+    const prompt = await loadPrompt({ value: run.prompt });
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -289,16 +287,16 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        cli: session.cli,
+        agent: run.agent,
         prompt,
         cwd,
-        model: resolveModel(session.model ?? resolved.model),
-        maxIterations: session.maxIterations,
+        model: resolveModel(run.model ?? resolved.model),
+        maxIterations: run.maxIterations,
         sentinel: resolved.sentinel,
-        vars: { ...resolved.vars, ...session.vars },
-        sessionId: session.id,
+        vars: { ...resolved.vars, ...run.vars },
+        runId: run.id,
         signal: controller.signal,
-        startIteration: session.iterations.length + 1,
+        startIteration: run.iterations.length + 1,
         onOutput: (chunk) => {
           process.stdout.write(chunk);
         },
@@ -307,17 +305,10 @@ program
       process.off("SIGINT", onSigint);
     }
 
-    const mergedIterations = [
-      ...session.iterations,
-      ...toIterationRecords(result),
-    ];
-    const finalized = finalizeSession(
-      session,
-      result.stopReason,
-      mergedIterations,
-    );
-    await writeSession(finalized, cwd);
-    await persistTranscript(session, result, cwd, "append");
+    const mergedIterations = [...run.iterations, ...toIterationRecords(result)];
+    const finalized = finalizeRun(run, result.stopReason, mergedIterations);
+    await writeRun(finalized, cwd);
+    await persistTranscript(run, result, cwd, "append");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);

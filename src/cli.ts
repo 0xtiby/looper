@@ -36,7 +36,7 @@ import {
 import {
   finalizeRun,
   type IterationRecord,
-  listInterruptedRuns,
+  listNonCompleteRuns,
   newActiveRun,
   type Run,
   readRun,
@@ -150,11 +150,6 @@ function toIterationRecords(result: LoopResult): IterationRecord[] {
   }));
 }
 
-function describePromptSource(options: RunCommandOptions): string {
-  if (options.promptStdin) return "<stdin>";
-  return options.prompt ?? "";
-}
-
 function resolveModel(model: string | null | undefined): string | undefined {
   if (!model || model === "default") return undefined;
   return model;
@@ -253,7 +248,7 @@ program
     const runId = randomUUID();
     const run = newActiveRun({
       id: runId,
-      prompt: describePromptSource(options),
+      prompt,
       agent: resolved.agent,
       model: resolved.model,
       maxIterations: resolved.maxIterations,
@@ -304,17 +299,17 @@ program
     const cwd = process.cwd();
 
     if (!runId) {
-      const runs = await listInterruptedRuns(cwd);
+      const runs = await listNonCompleteRuns(cwd);
       if (runs.length === 0) {
-        console.log("No interrupted runs.");
+        console.log("No non-complete runs.");
         return;
       }
       for (const r of runs) {
-        const preview =
-          r.prompt.length > 60 ? `${r.prompt.slice(0, 60)}…` : r.prompt;
         const shortId = r.id.slice(0, 8);
+        const stopReason = r.stopReason ?? "active";
+        const progress = `${r.iterations.length}/${r.maxIterations}`;
         console.log(
-          `${shortId}  ${r.startedAt}  (${r.iterations.length} done)  ${preview}`,
+          `${shortId}  ${r.startedAt}  ${stopReason}  ${r.agent}  ${progress}`,
         );
       }
       return;
@@ -325,18 +320,14 @@ program
       console.error(`Run ${runId} not found`);
       process.exit(1);
     }
-    if (run.state !== "interrupted") {
-      console.error(`Run ${runId} is ${run.state}, not interrupted`);
-      process.exit(1);
-    }
-    if (run.prompt === "<stdin>") {
-      console.error("Cannot resume runs whose prompt came from stdin");
+    if (run.state === "completed") {
+      console.error(`Run ${runId} is already complete`);
       process.exit(1);
     }
 
     const fileConfig = await loadConfig(cwd);
     const resolved = resolveConfig(fileConfig);
-    const prompt = await loadPrompt({ value: run.prompt });
+    const prompt = run.prompt;
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();

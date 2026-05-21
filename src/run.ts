@@ -79,9 +79,11 @@ export function finalizeRun(
   stopReason: RunStopReason,
   iterations: IterationRecord[],
 ): Run {
+  const isComplete =
+    stopReason === "sentinel" || stopReason === "max_iterations";
   return {
     ...run,
-    state: stopReason === "aborted" ? "interrupted" : "completed",
+    state: isComplete ? "completed" : "interrupted",
     completedAt: new Date().toISOString(),
     stopReason,
     iterations,
@@ -130,7 +132,7 @@ export async function readRun(cwd: string, id: string): Promise<Run | null> {
   return RunSchema.parse(JSON.parse(raw));
 }
 
-export async function listInterruptedRuns(cwd: string): Promise<Run[]> {
+export async function listNonCompleteRuns(cwd: string): Promise<Run[]> {
   const dir = path.join(cwd, ".looper", "runs");
   let files: string[];
   try {
@@ -144,7 +146,7 @@ export async function listInterruptedRuns(cwd: string): Promise<Run[]> {
     if (!f.endsWith(".json")) continue;
     const raw = await readFile(path.join(dir, f), "utf8");
     const parsed = RunSchema.safeParse(JSON.parse(raw));
-    if (parsed.success && parsed.data.state === "interrupted") {
+    if (parsed.success && parsed.data.state !== "completed") {
       runs.push(parsed.data);
     }
   }

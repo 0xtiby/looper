@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   finalizeRun,
   type IterationRecord,
-  listInterruptedRuns,
+  listNonCompleteRuns,
   newActiveRun,
   RunSchema,
   readRun,
@@ -51,6 +51,20 @@ describe("run", () => {
     const finalized = finalizeRun(active, "aborted", []);
     expect(finalized.state).toBe("interrupted");
     expect(finalized.stopReason).toBe("aborted");
+    expect(RunSchema.safeParse(finalized).success).toBe(true);
+  });
+
+  it("finalizeRun with 'error' transitions to interrupted", () => {
+    const active = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: null,
+      maxIterations: 3,
+    });
+    const finalized = finalizeRun(active, "error", []);
+    expect(finalized.state).toBe("interrupted");
+    expect(finalized.stopReason).toBe("error");
     expect(RunSchema.safeParse(finalized).success).toBe(true);
   });
 
@@ -127,7 +141,7 @@ describe("run", () => {
     expect(await readRun(workDir, "does-not-exist")).toBeNull();
   });
 
-  it("listInterruptedRuns returns only runs whose state is 'interrupted'", async () => {
+  it("listNonCompleteRuns returns runs whose state is not 'completed'", async () => {
     const active = newActiveRun({
       id: "active-1",
       prompt: "p",
@@ -157,12 +171,25 @@ describe("run", () => {
       "aborted",
       [],
     );
+    const errored = finalizeRun(
+      newActiveRun({
+        id: "errored-1",
+        prompt: "p",
+        agent: "claude",
+        model: null,
+        maxIterations: 2,
+      }),
+      "error",
+      [],
+    );
     await writeRun(active, workDir);
     await writeRun(completed, workDir);
     await writeRun(interrupted, workDir);
+    await writeRun(errored, workDir);
 
-    const list = await listInterruptedRuns(workDir);
-    expect(list.map((r) => r.id)).toEqual(["interrupted-1"]);
+    const list = await listNonCompleteRuns(workDir);
+    const ids = list.map((r) => r.id).sort();
+    expect(ids).toEqual(["active-1", "errored-1", "interrupted-1"]);
   });
 
   it("RunSchema rejects invalid state values", () => {

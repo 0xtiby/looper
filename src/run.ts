@@ -22,6 +22,17 @@ export const IterationRecordSchema = z.object({
 
 export type IterationRecord = z.infer<typeof IterationRecordSchema>;
 
+export const ResumeHistoryEntrySchema = z.object({
+  resumedAt: z.string(),
+  fromIteration: z.number().int().positive(),
+  previousAgent: z.string().optional(),
+  previousModel: z.string().nullable().optional(),
+  newAgent: z.string().optional(),
+  newModel: z.string().nullable().optional(),
+});
+
+export type ResumeHistoryEntry = z.infer<typeof ResumeHistoryEntrySchema>;
+
 export const RunStateSchema = z.enum(["active", "completed", "interrupted"]);
 export type RunState = z.infer<typeof RunStateSchema>;
 
@@ -45,6 +56,7 @@ export const RunSchema = z.object({
   completedAt: z.string().nullable(),
   stopReason: RunStopReasonSchema.nullable(),
   iterations: z.array(IterationRecordSchema),
+  resumeHistory: z.array(ResumeHistoryEntrySchema).default([]),
 });
 
 export type Run = z.infer<typeof RunSchema>;
@@ -56,6 +68,11 @@ export interface NewRunInput {
   model: string | null;
   maxIterations: number;
   vars?: Record<string, string>;
+}
+
+export interface ResumeOverride {
+  agent?: z.infer<typeof AgentIdSchema>;
+  model?: string | null;
 }
 
 export function newActiveRun(input: NewRunInput): Run {
@@ -71,7 +88,43 @@ export function newActiveRun(input: NewRunInput): Run {
     completedAt: null,
     stopReason: null,
     iterations: [],
+    resumeHistory: [],
   };
+}
+
+export function applyResumeOverride(run: Run, override: ResumeOverride): Run {
+  const agentChanged =
+    override.agent !== undefined && override.agent !== run.agent;
+  const modelChanged =
+    override.model !== undefined && override.model !== run.model;
+
+  if (!agentChanged && !modelChanged) {
+    return run;
+  }
+
+  const fromIteration = run.iterations.length + 1;
+
+  const entry: ResumeHistoryEntry = {
+    resumedAt: new Date().toISOString(),
+    fromIteration,
+    ...(agentChanged
+      ? { previousAgent: run.agent, newAgent: override.agent }
+      : {}),
+    ...(modelChanged
+      ? { previousModel: run.model, newModel: override.model }
+      : {}),
+  };
+
+  return {
+    ...run,
+    agent: override.agent ?? run.agent,
+    model: override.model ?? run.model,
+    resumeHistory: [...run.resumeHistory, entry],
+  };
+}
+
+export function hasResumeHistory(run: Run): boolean {
+  return run.resumeHistory.length > 0;
 }
 
 export function finalizeRun(

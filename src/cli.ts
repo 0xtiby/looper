@@ -34,7 +34,9 @@ import {
   UnsupportedModelError,
 } from "./preflight.js";
 import {
+  applyResumeOverride,
   finalizeRun,
+  hasResumeHistory,
   type IterationRecord,
   listNonCompleteRuns,
   newActiveRun,
@@ -56,6 +58,11 @@ interface RunCommandOptions {
   sentinel?: string;
   var?: Record<string, string>;
   cwd?: string;
+}
+
+interface ResumeCommandOptions {
+  agent?: AgentId;
+  model?: string;
 }
 
 function parsePositiveInt(value: string): number {
@@ -295,7 +302,13 @@ program
 program
   .command("resume [run-id]")
   .description("Resume an interrupted run (or list them with no id)")
-  .action(async (runId?: string) => {
+  .addOption(
+    new Option("--agent <id>", "Agent override for the resumed run").choices(
+      SUPPORTED_AGENTS,
+    ),
+  )
+  .option("--model <name>", "model override for the resumed run")
+  .action(async (runId: string | undefined, options: ResumeCommandOptions) => {
     const cwd = process.cwd();
 
     if (!runId) {
@@ -308,8 +321,9 @@ program
         const shortId = r.id.slice(0, 8);
         const stopReason = r.stopReason ?? "active";
         const progress = `${r.iterations.length}/${r.maxIterations}`;
+        const historyIndicator = hasResumeHistory(r) ? " [resumed]" : "";
         console.log(
-          `${shortId}  ${r.startedAt}  ${stopReason}  ${r.agent}  ${progress}`,
+          `${shortId}  ${r.startedAt}  ${stopReason}  ${r.agent}${historyIndicator}  ${progress}`,
         );
       }
       return;
@@ -325,9 +339,32 @@ program
       process.exit(1);
     }
 
+    const resumedRun = applyResumeOverride(run, {
+      agent: options.agent,
+      model: options.model,
+    });
+
     const fileConfig = await loadConfig(cwd);
     const resolved = resolveConfig(fileConfig);
-    const prompt = run.prompt;
+
+    try {
+      await preflight(resumedRun.agent, resumedRun.model ?? undefined, {
+        discoverAgents: discoverAcpAgents,
+      });
+    } catch (err) {
+      if (
+        err instanceof MissingAgentError ||
+        err instanceof UnavailableAgentError ||
+        err instanceof PreflightIncompatibleAgentError ||
+        err instanceof UnsupportedModelError
+      ) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      throw err;
+    }
+
+    const prompt = resumedRun.prompt;
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -336,16 +373,16 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        agent: run.agent,
+        agent: resumedRun.agent,
         prompt,
         cwd,
-        model: resolveModel(run.model ?? resolved.model),
-        maxIterations: run.maxIterations,
+        model: resolveModel(resumedRun.model),
+        maxIterations: resumedRun.maxIterations,
         sentinel: resolved.sentinel,
-        vars: { ...resolved.vars, ...run.vars },
-        runId: run.id,
+        vars: { ...resolved.vars, ...resumedRun.vars },
+        runId: resumedRun.id,
         signal: controller.signal,
-        startIteration: run.iterations.length + 1,
+        startIteration: resumedRun.iterations.length + 1,
         onOutput: (chunk) => {
           process.stdout.write(chunk);
         },
@@ -354,13 +391,33 @@ program
       process.off("SIGINT", onSigint);
     }
 
-    const mergedIterations = [...run.iterations, ...toIterationRecords(result)];
-    const finalized = finalizeRun(run, result.stopReason, mergedIterations);
+    const mergedIterations = [
+      ...resumedRun.iterations,
+      ...toIterationRecords(result),
+    ];
+    const finalized = finalizeRun(
+      resumedRun,
+      result.stopReason,
+      mergedIterations,
+    );
     await writeRun(finalized, cwd);
-    await persistTranscript(run, result, cwd, "append");
+    await persistTranscript(resumedRun, result, cwd, "append");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);
+  });
+
+program
+  .command("inspect <run-id>")
+  .description("Show persisted context and resume history for a run")
+  .action(async (runId: string) => {
+    const cwd = process.cwd();
+    const run = await readRun(cwd, runId);
+    if (!run) {
+      console.error(`Run ${runId} not found`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify(run, null, 2));
   });
 
 program

@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  applyResumeOverride,
   finalizeRun,
+  hasResumeHistory,
   type IterationRecord,
   listNonCompleteRuns,
   newActiveRun,
@@ -206,5 +208,238 @@ describe("run", () => {
       iterations: [],
     });
     expect(result.success).toBe(false);
+  });
+
+  it("RunSchema parses old runs without resumeHistory", () => {
+    const run = {
+      id: "legacy",
+      prompt: "p",
+      agent: "claude",
+      model: null,
+      maxIterations: 1,
+      state: "active",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      stopReason: null,
+      iterations: [],
+    };
+    const parsed = RunSchema.safeParse(run);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.resumeHistory).toEqual([]);
+  });
+
+  it("RunSchema parses runs with resumeHistory", () => {
+    const run = {
+      id: "legacy",
+      prompt: "p",
+      agent: "codex",
+      model: null,
+      maxIterations: 1,
+      state: "interrupted",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      stopReason: "error",
+      iterations: [],
+      resumeHistory: [
+        {
+          resumedAt: "2026-05-21T10:00:00.000Z",
+          fromIteration: 3,
+          previousAgent: "claude",
+          newAgent: "codex",
+        },
+      ],
+    };
+    const parsed = RunSchema.safeParse(run);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.resumeHistory).toHaveLength(1);
+    expect(parsed.data?.resumeHistory[0]?.newAgent).toBe("codex");
+  });
+
+  it("applyResumeOverride returns the same run when override is empty", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: null,
+      maxIterations: 3,
+    });
+    const updated = applyResumeOverride(run, {});
+    expect(updated).toBe(run);
+  });
+
+  it("applyResumeOverride updates agent and records history entry", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: null,
+      maxIterations: 3,
+    });
+    run.iterations = [
+      {
+        number: 1,
+        exitCode: 0,
+        durationMs: 100,
+        tokensIn: 10,
+        tokensOut: 20,
+        sentinelDetected: false,
+        error: null,
+      },
+    ];
+
+    const updated = applyResumeOverride(run, { agent: "codex" });
+
+    expect(updated.agent).toBe("codex");
+    expect(updated.model).toBeNull();
+    expect(updated.resumeHistory).toHaveLength(1);
+    expect(updated.resumeHistory[0]).toMatchObject({
+      fromIteration: 2,
+      previousAgent: "claude",
+      newAgent: "codex",
+    });
+  });
+
+  it("applyResumeOverride updates model and records history entry", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: "sonnet",
+      maxIterations: 3,
+    });
+    run.iterations = [
+      {
+        number: 1,
+        exitCode: 0,
+        durationMs: 100,
+        tokensIn: 10,
+        tokensOut: 20,
+        sentinelDetected: false,
+        error: null,
+      },
+    ];
+
+    const updated = applyResumeOverride(run, { model: "opus" });
+
+    expect(updated.agent).toBe("claude");
+    expect(updated.model).toBe("opus");
+    expect(updated.resumeHistory).toHaveLength(1);
+    expect(updated.resumeHistory[0]).toMatchObject({
+      fromIteration: 2,
+      previousModel: "sonnet",
+      newModel: "opus",
+    });
+  });
+
+  it("applyResumeOverride updates both agent and model in a single history entry", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: "sonnet",
+      maxIterations: 3,
+    });
+    run.iterations = [
+      {
+        number: 1,
+        exitCode: 0,
+        durationMs: 100,
+        tokensIn: 10,
+        tokensOut: 20,
+        sentinelDetected: false,
+        error: null,
+      },
+    ];
+
+    const updated = applyResumeOverride(run, { agent: "codex", model: "o3" });
+
+    expect(updated.agent).toBe("codex");
+    expect(updated.model).toBe("o3");
+    expect(updated.resumeHistory).toHaveLength(1);
+    expect(updated.resumeHistory[0]).toMatchObject({
+      fromIteration: 2,
+      previousAgent: "claude",
+      previousModel: "sonnet",
+      newAgent: "codex",
+      newModel: "o3",
+    });
+  });
+
+  it("applyResumeOverride appends to existing resume history", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "codex",
+      model: null,
+      maxIterations: 5,
+    });
+    run.iterations = [
+      {
+        number: 1,
+        exitCode: 0,
+        durationMs: 100,
+        tokensIn: 10,
+        tokensOut: 20,
+        sentinelDetected: false,
+        error: null,
+      },
+      {
+        number: 2,
+        exitCode: 0,
+        durationMs: 100,
+        tokensIn: 10,
+        tokensOut: 20,
+        sentinelDetected: false,
+        error: null,
+      },
+    ];
+    run.resumeHistory = [
+      {
+        resumedAt: "2026-05-21T09:00:00.000Z",
+        fromIteration: 2,
+        previousAgent: "claude",
+        newAgent: "codex",
+      },
+    ];
+
+    const updated = applyResumeOverride(run, { model: "o3" });
+
+    expect(updated.agent).toBe("codex");
+    expect(updated.model).toBe("o3");
+    expect(updated.resumeHistory).toHaveLength(2);
+    expect(updated.resumeHistory[1]).toMatchObject({
+      fromIteration: 3,
+      newModel: "o3",
+    });
+  });
+
+  it("hasResumeHistory returns false for a run with empty history", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: null,
+      maxIterations: 3,
+    });
+    expect(hasResumeHistory(run)).toBe(false);
+  });
+
+  it("hasResumeHistory returns true for a run with history entries", () => {
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "claude",
+      model: null,
+      maxIterations: 3,
+    });
+    run.resumeHistory = [
+      {
+        resumedAt: "2026-05-21T10:00:00.000Z",
+        fromIteration: 2,
+        previousAgent: "claude",
+        newAgent: "codex",
+      },
+    ];
+    expect(hasResumeHistory(run)).toBe(true);
   });
 });

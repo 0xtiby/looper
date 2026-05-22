@@ -101,15 +101,19 @@ const SessionNewResultSchema = z
   })
   .passthrough();
 
+const AcpTextContentSchema = z
+  .object({
+    type: z.literal("text"),
+    text: z.string(),
+  })
+  .passthrough();
+
+const AcpTextContentArraySchema = z.array(AcpTextContentSchema);
+
 const SessionUpdateParamsSchema = z
   .object({
     sessionUpdate: z.string(),
-    content: z
-      .object({
-        type: z.literal("text"),
-        text: z.string(),
-      })
-      .optional(),
+    content: z.unknown().optional(),
   })
   .passthrough();
 
@@ -201,7 +205,10 @@ class StdioAcpClient implements AcpClient {
       this.consumeStdout(chunk.toString());
     });
     this.proc.stderr.on("data", (chunk: Buffer | string) => {
-      this.updates.push({ type: "transcript", text: chunk.toString() });
+      this.updates.push({
+        type: "transcript",
+        text: stderrTranscriptChunk(chunk.toString()),
+      });
     });
     this.proc.once("error", (error) => {
       this.rejectAll(error);
@@ -333,13 +340,17 @@ class StdioAcpClient implements AcpClient {
     if (method !== "session/update") return;
     const parsed = SessionUpdateParamsSchema.safeParse(params);
     if (!parsed.success) return;
-    const content = parsed.data.content;
-    if (
-      parsed.data.sessionUpdate === "agent_message_chunk" &&
-      content !== undefined
-    ) {
-      this.updates.push({ type: "assistant_text", text: content.text });
+    const text = textContentFromUnknown(parsed.data.content);
+    if (parsed.data.sessionUpdate === "agent_message_chunk") {
+      if (text !== null) {
+        this.updates.push({ type: "assistant_text", text });
+      }
+      return;
     }
+    this.updates.push({
+      type: "transcript",
+      text: acpSessionUpdateTranscript(parsed.data.sessionUpdate, text),
+    });
   }
 
   private rejectAll(error: Error): void {
@@ -348,6 +359,29 @@ class StdioAcpClient implements AcpClient {
     }
     this.pending.clear();
   }
+}
+
+function textContentFromUnknown(content: unknown): string | null {
+  const single = AcpTextContentSchema.safeParse(content);
+  if (single.success) return single.data.text;
+
+  const many = AcpTextContentArraySchema.safeParse(content);
+  if (!many.success || many.data.length === 0) return null;
+  return many.data.map((item) => item.text).join("");
+}
+
+function acpSessionUpdateTranscript(
+  sessionUpdate: string,
+  text: string | null,
+): string {
+  if (text === null) return `[acp ${sessionUpdate}]\n`;
+  const suffix = text.endsWith("\n") ? "" : "\n";
+  return `[acp ${sessionUpdate}] ${text}${suffix}`;
+}
+
+function stderrTranscriptChunk(text: string): string {
+  const suffix = text.endsWith("\n") ? "" : "\n";
+  return `[stderr] ${text}${suffix}`;
 }
 
 function toPromptEventWinner(

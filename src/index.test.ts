@@ -5,6 +5,7 @@ import type {
   SpawnOptions,
 } from "@0xtiby/spawner";
 import { describe, expect, it, vi } from "vitest";
+import type { AcpSessionEvent } from "./acp.js";
 import {
   type AcpClient,
   type AcpClientFactory,
@@ -50,8 +51,8 @@ function okResult(): CliResult {
 }
 
 async function* acpEvents(
-  events: { type: "assistant_text"; text: string }[],
-): AsyncGenerator<{ type: "assistant_text"; text: string }> {
+  events: AcpSessionEvent[],
+): AsyncGenerator<AcpSessionEvent> {
   for (const event of events) {
     yield event;
   }
@@ -108,6 +109,89 @@ describe("loop", () => {
       "close",
     ]);
     expect(result.stopReason).toBe("max_iterations");
+  });
+
+  it("stops an ACP Run when the Sentinel appears in Assistant text", async () => {
+    const createAcpClient = vi.fn<AcpClientFactory>(() => ({
+      initialize: async () => {},
+      newSession: async () => ({ sessionId: "fresh-session-1" }),
+      prompt: () =>
+        acpEvents([
+          { type: "assistant_text", text: "complete :::LOOPER_DONE:::" },
+        ]),
+      close: async () => {},
+    }));
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        maxIterations: 5,
+      },
+      { createAcpClient },
+    );
+
+    expect(createAcpClient).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe("sentinel");
+    expect(result.iterations[0]?.sentinelDetected).toBe(true);
+  });
+
+  it("does not stop an ACP Run when the Sentinel appears in transcript progress", async () => {
+    const createAcpClient: AcpClientFactory = () => ({
+      initialize: async () => {},
+      newSession: async () => ({ sessionId: "fresh-session-1" }),
+      prompt: () =>
+        acpEvents([
+          { type: "transcript", text: "[acp tool_call] :::LOOPER_DONE:::" },
+          { type: "transcript", text: "[stderr] :::LOOPER_DONE:::" },
+          { type: "assistant_text", text: "still working" },
+        ]),
+      close: async () => {},
+    });
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(result.stopReason).toBe("max_iterations");
+    expect(result.iterations[0]?.sentinelDetected).toBe(false);
+  });
+
+  it("keeps ACP transcript progress in stdout without making it Sentinel-eligible", async () => {
+    const createAcpClient: AcpClientFactory = () => ({
+      initialize: async () => {},
+      newSession: async () => ({ sessionId: "fresh-session-1" }),
+      prompt: () =>
+        acpEvents([
+          { type: "transcript", text: "[acp tool_call] running tests\n" },
+          { type: "assistant_text", text: "done" },
+        ]),
+      close: async () => {},
+    });
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(result.iterations[0]?.stdout).toBe(
+      "[acp tool_call] running tests\ndone",
+    );
   });
 
   it("spawns the CLI with the given prompt, agent, and cwd", async () => {

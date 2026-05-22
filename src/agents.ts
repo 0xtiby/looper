@@ -1,4 +1,11 @@
 import { type CliName, type DetectResult, detectAll } from "@0xtiby/spawner";
+import type { AgentServerConfig } from "./config.js";
+import {
+  type AcpRegistrySource,
+  MissingRegistryAgentError,
+  resolveRegistryAgentServer,
+  UnsupportedRegistryDistributionError,
+} from "./registry.js";
 
 export type AgentStatus = "available" | "unavailable";
 export type AgentCompatibility = "compatible" | "incompatible";
@@ -24,6 +31,10 @@ export interface ListedAgent {
 }
 
 export type DiscoverAgents = () => Promise<AcpAgent[]>;
+
+export interface DiscoverConfiguredAgentsOptions {
+  registrySource?: AcpRegistrySource;
+}
 
 interface SupportedAcpAgent {
   id: CliName;
@@ -71,6 +82,17 @@ export async function discoverAcpAgents(): Promise<AcpAgent[]> {
   );
 }
 
+export async function discoverConfiguredAgents(
+  agentServers: Record<string, AgentServerConfig>,
+  options: DiscoverConfiguredAgentsOptions = {},
+): Promise<AcpAgent[]> {
+  const agents: AcpAgent[] = [];
+  for (const [id, config] of Object.entries(agentServers)) {
+    agents.push(await configuredAgentFromServer(id, config, options));
+  }
+  return agents;
+}
+
 export async function listAgents(
   discoverAgents: DiscoverAgents,
 ): Promise<ListedAgent[]> {
@@ -81,16 +103,87 @@ export async function listAgents(
 export function formatAgentListingText(agents: ListedAgent[]): string {
   const rows = agents.map(
     (agent) =>
-      `${agent.id}\t${agent.displayName}\t${agent.status}\t${agent.compatibility}\t${agent.capabilitySummary}`,
+      `${agent.id}\t${agent.displayName}\t${sourceForAgent(agent)}\t${agent.status}\t${agent.compatibility}\t${agent.capabilitySummary}`,
   );
   return [
-    "Agent id\tName\tStatus\tCompatibility\tCapability summary",
+    "Agent id\tName\tSource\tStatus\tCompatibility\tCapability summary",
     ...rows,
   ].join("\n");
 }
 
 export function formatAgentListingJson(agents: ListedAgent[]): string {
   return `${JSON.stringify(agents, null, 2)}\n`;
+}
+
+async function configuredAgentFromServer(
+  id: string,
+  config: AgentServerConfig,
+  options: DiscoverConfiguredAgentsOptions,
+): Promise<AcpAgent> {
+  if (config.type === "custom") {
+    return {
+      id,
+      displayName: id,
+      status: "available",
+      isAfkSafe: true,
+      capabilitySummary: "Configured custom ACP Agent Server",
+      supportedModels: ["default"],
+      acpMetadata: {
+        source: "custom",
+        command: config.command,
+        args: config.args ?? [],
+      },
+    };
+  }
+
+  try {
+    const resolved = await resolveRegistryAgentServer(
+      config,
+      options.registrySource,
+      id,
+    );
+    return {
+      id,
+      displayName: resolved.agent.name,
+      status: "available",
+      isAfkSafe: true,
+      capabilitySummary:
+        resolved.agent.description ?? "Registry-backed ACP Agent Server",
+      supportedModels: ["default"],
+      acpMetadata: {
+        source: "registry",
+        registryAgentId: resolved.agent.id,
+        launch: resolved.launch,
+        version: resolved.agent.version,
+      },
+    };
+  } catch (err) {
+    if (
+      err instanceof MissingRegistryAgentError ||
+      err instanceof UnsupportedRegistryDistributionError
+    ) {
+      return {
+        id,
+        displayName: config.id ?? id,
+        status: "unavailable",
+        isAfkSafe: true,
+        capabilitySummary: err.message,
+        supportedModels: ["default"],
+        acpMetadata: {
+          source: "registry",
+          registryAgentId: config.id ?? id,
+          statusDetail: err.message,
+        },
+      };
+    }
+    throw err;
+  }
+}
+
+function sourceForAgent(agent: ListedAgent): string {
+  const source = agent.acpMetadata.source;
+  if (typeof source === "string") return source;
+  return "discovered";
 }
 
 function toAcpAgent(

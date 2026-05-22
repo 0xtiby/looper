@@ -3,7 +3,7 @@ import type { Writable } from "node:stream";
 import { z } from "zod";
 
 export interface AcpAgentServerLaunch {
-  type: "custom";
+  type: "custom" | "registry";
   command: string;
   args?: string[];
   env?: Record<string, string>;

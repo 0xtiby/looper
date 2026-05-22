@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type AcpAgent,
   discoverAcpAgents,
+  discoverConfiguredAgents,
   formatAgentListingJson,
   formatAgentListingText,
   listAgents,
@@ -105,6 +106,85 @@ describe("Agent listing", () => {
           models: ["sonnet", "opus"],
           permissions: { afkSafe: true },
         },
+      }),
+    ]);
+  });
+
+  it("formats configured Agent listings with source and status metadata", async () => {
+    const agents = await listAgents(async () => [
+      agent({
+        id: "claude-acp",
+        displayName: "Claude Agent",
+        status: "available",
+        acpMetadata: { source: "registry" },
+      }),
+      agent({
+        id: "local-agent",
+        status: "available",
+        acpMetadata: { source: "custom" },
+      }),
+    ]);
+
+    const output = formatAgentListingText(agents);
+
+    expect(output).toContain("Source");
+    expect(output).toContain("registry");
+    expect(output).toContain("custom");
+    expect(output).toContain("available");
+  });
+
+  it("lists configured custom and registry-backed Agent Servers with source status metadata", async () => {
+    const agents = await listAgents(() =>
+      discoverConfiguredAgents(
+        {
+          "local-agent": {
+            type: "custom",
+            command: "node",
+            args: ["./agent.js", "--acp"],
+          },
+          "claude-acp": {
+            type: "registry",
+          },
+        },
+        {
+          registrySource: {
+            type: "inline",
+            registry: {
+              agents: [
+                {
+                  id: "claude-acp",
+                  name: "Claude Agent",
+                  description: "ACP wrapper for Claude",
+                  distribution: {
+                    npx: {
+                      package: "@agentclientprotocol/claude-agent-acp@0.37.0",
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ),
+    );
+
+    expect(agents).toEqual([
+      expect.objectContaining({
+        id: "claude-acp",
+        displayName: "Claude Agent",
+        status: "available",
+        acpMetadata: expect.objectContaining({
+          source: "registry",
+          registryAgentId: "claude-acp",
+        }),
+      }),
+      expect.objectContaining({
+        id: "local-agent",
+        status: "available",
+        acpMetadata: expect.objectContaining({
+          source: "custom",
+          command: "node",
+        }),
       }),
     ]);
   });

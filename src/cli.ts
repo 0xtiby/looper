@@ -3,8 +3,10 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Command, InvalidArgumentError, Option } from "commander";
+import type { AcpAgentServerLaunch } from "./acp.js";
 import {
   discoverAcpAgents,
+  discoverConfiguredAgents,
   formatAgentListingJson,
   formatAgentListingText,
   type ListedAgent,
@@ -13,7 +15,6 @@ import {
 import {
   type AgentId,
   AgentIdSchema,
-  type AgentServerConfig,
   applyOverrides,
   BuiltInAgentIdSchema,
   DEFAULT_CONFIG,
@@ -36,6 +37,7 @@ import {
   UnavailableAgentError,
   UnsupportedModelError,
 } from "./preflight.js";
+import { resolveRegistryAgentServer } from "./registry.js";
 import {
   applyResumeOverride,
   finalizeRun,
@@ -181,10 +183,18 @@ class ConfiguredAgentServerError extends Error {
   }
 }
 
-function resolveAgentServer(config: ResolvedConfig): AgentServerConfig {
+async function resolveAgentServer(
+  config: ResolvedConfig,
+): Promise<AcpAgentServerLaunch> {
   const agentServer = config.agentServers[config.agent];
-  if (agentServer) return agentServer;
-  throw new ConfiguredAgentServerError(config.agent);
+  if (!agentServer) throw new ConfiguredAgentServerError(config.agent);
+  if (agentServer.type === "custom") return agentServer;
+  const resolved = await resolveRegistryAgentServer(
+    agentServer,
+    undefined,
+    config.agent,
+  );
+  return resolved.launch;
 }
 
 async function preflightBuiltInAgent(config: ResolvedConfig): Promise<void> {
@@ -206,7 +216,13 @@ program
   .description("List discovered ACP Agents")
   .option("--json", "print detailed Agent metadata as JSON")
   .action(async (options: { json?: boolean }) => {
-    const agents = await listAgents(discoverAcpAgents);
+    const fileConfig = await loadConfig(process.cwd());
+    const agents = await listAgents(() => {
+      if (fileConfig?.agent_servers) {
+        return discoverConfiguredAgents(fileConfig.agent_servers);
+      }
+      return discoverAcpAgents();
+    });
     if (options.json) {
       process.stdout.write(formatAgentListingJson(agents));
       return;
@@ -250,7 +266,7 @@ program
       sentinel: options.sentinel,
     });
 
-    const agentServer = resolveAgentServer(resolved);
+    const agentServer = await resolveAgentServer(resolved);
 
     try {
       await preflightBuiltInAgent(resolved);
@@ -371,7 +387,7 @@ program
     const fileConfig = await loadConfig(cwd);
     const resolved = resolveConfig(fileConfig);
 
-    const agentServer = resolveAgentServer({
+    const agentServer = await resolveAgentServer({
       ...resolved,
       agent: resumedRun.agent,
       model: resumedRun.model ?? resolved.model,

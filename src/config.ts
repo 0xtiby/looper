@@ -19,9 +19,22 @@ export const CustomAgentServerSchema = z
   })
   .strict();
 
+export const RegistryAgentServerSchema = z
+  .object({
+    type: z.literal("registry"),
+    id: z.string().min(1).optional(),
+    registryUrl: z.string().url().optional(),
+  })
+  .strict();
+
+export const AgentServerSchema = z.discriminatedUnion("type", [
+  CustomAgentServerSchema,
+  RegistryAgentServerSchema,
+]);
+
 export const AgentServersSchema = z.record(
   z.string().min(1),
-  CustomAgentServerSchema,
+  AgentServerSchema,
 );
 
 const ConfigObjectSchema = z.object({
@@ -52,7 +65,7 @@ export const ConfigSchema = ConfigObjectSchema.superRefine((config, ctx) => {
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
-export type AgentServerConfig = z.infer<typeof CustomAgentServerSchema>;
+export type AgentServerConfig = z.infer<typeof AgentServerSchema>;
 
 export type AgentId = z.infer<typeof AgentIdSchema>;
 

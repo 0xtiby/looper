@@ -113,6 +113,33 @@ describe("config", () => {
     expect(config).toEqual({ agent: "codex", model: "o3" });
   });
 
+  it("loadConfig accepts a configured registry-backed ACP Agent Server", async () => {
+    await mkdir(path.join(workDir, ".looper"), { recursive: true });
+    await writeFile(
+      path.join(workDir, ".looper", "config.json"),
+      JSON.stringify({
+        agent: "claude-acp",
+        agent_servers: {
+          "claude-acp": {
+            type: "registry",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const config = await loadConfig(workDir);
+
+    expect(config).toEqual({
+      agent: "claude-acp",
+      agent_servers: {
+        "claude-acp": {
+          type: "registry",
+        },
+      },
+    });
+  });
+
   it("loadConfig accepts a configured custom ACP Agent Server", async () => {
     await mkdir(path.join(workDir, ".looper"), { recursive: true });
     await writeFile(

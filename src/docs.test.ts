@@ -2,6 +2,44 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("v2 documentation surface", () => {
+  it("CONTEXT defines ACP client, server, registry, and Zed-style server catalog terms", async () => {
+    const context = await readFile("docs/CONTEXT.md", "utf8");
+
+    expect(context).toContain("**ACP Client**");
+    expect(context).toContain("**ACP Agent Server**");
+    expect(context).toContain("**ACP Registry**");
+    expect(context).toContain("**Zed-style `agent_servers`**");
+  });
+
+  it("ADR-0001 names ACP JSON-RPC as the v2 runtime contract", async () => {
+    const adr = await readFile("docs/adr/0001-looper-v2-acp-native.md", "utf8");
+
+    expect(adr).toContain("ACP JSON-RPC is the runtime contract");
+    expect(adr).toContain("not CLI stdout parsing");
+    expect(adr).toContain("not `@0xtiby/spawner` semantics");
+  });
+
+  it("CONTEXT maps Fresh sessions, Assistant text, and Sentinel to ACP events", async () => {
+    const context = await readFile("docs/CONTEXT.md", "utf8");
+
+    expect(context).toContain("Fresh session maps to ACP `session/new`");
+    expect(context).toContain(
+      "Assistant text maps to ACP `agent_message_chunk` text content",
+    );
+    expect(context).toContain(
+      "Sentinel ignores tool output, permission prompts, stderr logs, raw transport data, and non-text content",
+    );
+  });
+
+  it("documentation says users can configure ACP Agent Servers without built-in adapters", async () => {
+    const context = await readFile("docs/CONTEXT.md", "utf8");
+    const readme = await readFile("README.md", "utf8");
+
+    expect(`${context}\n${readme}`).toContain(
+      "Users can configure their own ACP Agent Servers rather than waiting for Looper-maintained built-in adapters",
+    );
+  });
+
   it("README describes the product as Looper v2", async () => {
     const readme = await readFile("README.md", "utf8");
     expect(readme).toContain("Looper v2");

@@ -29,7 +29,10 @@ Looper is **stateless** — every iteration is a fresh spawn with no shared
 conversation state. It has no opinions about specs, plans, trackers, git, or
 project structure. The prompt is the instruction.
 
-Under the hood, Looper drives Agents via [`@0xtiby/spawner`](https://github.com/0xtiby/spawner).
+Under the hood, Looper is an **ACP Client**. It speaks ACP JSON-RPC with
+configured **ACP Agent Servers** over stdio, and the runtime contract is ACP
+messages rather than ordinary CLI stdout parsing. Users can configure their own
+ACP Agent Servers rather than waiting for Looper-maintained built-in adapters.
 
 ## Prerequisites
 

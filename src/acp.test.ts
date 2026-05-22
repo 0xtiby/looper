@@ -111,6 +111,43 @@ describe("ACP stdio client", () => {
     });
   });
 
+  it("denies ACP permission requests without blocking the Run", async () => {
+    const client = createAcpStdioClient({
+      server: {
+        type: "custom",
+        command: process.execPath,
+        args: ["-e", fakePermissionRequestServerScript()],
+      },
+      cwd: workDir,
+    });
+
+    await client.initialize();
+    const session = await client.newSession({ cwd: workDir });
+    const events: AcpSessionEvent[] = [];
+
+    try {
+      for await (const event of withTimeout(
+        client.prompt({
+          sessionId: session.sessionId,
+          content: [{ type: "text", text: "run" }],
+        }),
+      )) {
+        events.push(event);
+      }
+    } finally {
+      await client.close();
+    }
+
+    expect(events).toContainEqual({
+      type: "transcript",
+      text: "[acp permission] denied session/request_permission by AFK-safe policy\n",
+    });
+    expect(events).toContainEqual({
+      type: "assistant_text",
+      text: "permission denied without blocking",
+    });
+  });
+
   it("rejects ordinary process stdout because stdout is ACP messages only", async () => {
     const client = createAcpStdioClient({
       server: {
@@ -169,6 +206,30 @@ function handle(request) {
 `;
 }
 
+async function* withTimeout(
+  events: AsyncIterable<AcpSessionEvent>,
+): AsyncGenerator<AcpSessionEvent> {
+  const iterator = events[Symbol.asyncIterator]();
+  try {
+    while (true) {
+      const result = await Promise.race([
+        iterator.next(),
+        timeout<AcpSessionEvent>(500),
+      ]);
+      if (result.done) return;
+      yield result.value;
+    }
+  } finally {
+    await iterator.return?.();
+  }
+}
+
+function timeout<T>(ms: number): Promise<IteratorResult<T>> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("ACP prompt did not complete")), ms);
+  });
+}
+
 function fakeMixedSessionUpdateServerScript(): string {
   return `
 let buffer = '';
@@ -212,6 +273,63 @@ function handle(request) {
     update('agent_message_chunk', { type: 'text', text: 'assistant :::LOOPER_DONE::: text' });
     process.stderr.write('stderr :::LOOPER_DONE::: log\\n');
     setTimeout(() => send({ jsonrpc: '2.0', id: request.id, result: {} }), 10);
+  }
+}
+`;
+}
+
+function fakePermissionRequestServerScript(): string {
+  return `
+let buffer = '';
+let promptRequestId = null;
+process.stdin.on('data', (chunk) => {
+  buffer += chunk.toString();
+  let newline = buffer.indexOf('\\n');
+  while (newline >= 0) {
+    const line = buffer.slice(0, newline);
+    buffer = buffer.slice(newline + 1);
+    if (line.trim().length > 0) handle(JSON.parse(line));
+    newline = buffer.indexOf('\\n');
+  }
+});
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + '\\n');
+}
+function update(sessionUpdate, content) {
+  send({
+    jsonrpc: '2.0',
+    method: 'session/update',
+    params: { sessionUpdate, content }
+  });
+}
+function handle(request) {
+  if (request.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: request.id, result: {} });
+    return;
+  }
+  if (request.method === 'session/new') {
+    send({ jsonrpc: '2.0', id: request.id, result: { sessionId: 'fresh-session-1' } });
+    return;
+  }
+  if (request.method === 'session/prompt') {
+    promptRequestId = request.id;
+    send({
+      jsonrpc: '2.0',
+      id: 'permission-1',
+      method: 'session/request_permission',
+      params: { reason: 'needs approval' }
+    });
+    return;
+  }
+  if (request.id === 'permission-1') {
+    if (request.result?.outcome !== 'denied') {
+      throw new Error('expected denied permission response');
+    }
+    update('agent_message_chunk', {
+      type: 'text',
+      text: 'permission denied without blocking'
+    });
+    send({ jsonrpc: '2.0', id: promptRequestId, result: {} });
   }
 }
 `;

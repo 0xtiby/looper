@@ -161,6 +161,7 @@ _Avoid_: unrestricted chooser
 - Fresh session maps to ACP `session/new`; every Looper iteration creates a new ACP session with no carried conversation state.
 - Assistant text maps to ACP `agent_message_chunk` text content received through `session/update`.
 - Sentinel ignores tool output, permission prompts, stderr logs, raw transport data, and non-text content; only **Assistant text** can satisfy the **Stop condition**.
+- The default ACP `session/request_permission` policy is deny, so **AFK-safe** Runs answer permission requests non-interactively instead of waiting for approval.
 - ACP `session/prompt` drives one prompt turn for a **Fresh session**, but ACP session shutdown is not the same thing as Looper **Run** completion.
 - Users can configure their own ACP Agent Servers rather than waiting for Looper-maintained built-in adapters.
 

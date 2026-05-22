@@ -72,10 +72,12 @@ type SpawnAcpProcess = (
   options: SpawnAcpProcessOptions,
 ) => AcpProcess;
 
+const JsonRpcIdSchema = z.union([z.string(), z.number()]);
+
 const JsonRpcResponseSchema = z
   .object({
     jsonrpc: z.literal("2.0"),
-    id: z.union([z.string(), z.number()]),
+    id: JsonRpcIdSchema,
     result: z.unknown().optional(),
     error: z
       .object({
@@ -83,6 +85,16 @@ const JsonRpcResponseSchema = z
         message: z.string(),
       })
       .optional(),
+  })
+  .passthrough()
+  .refine((message) => "result" in message || "error" in message);
+
+const JsonRpcServerRequestSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    id: JsonRpcIdSchema,
+    method: z.string(),
+    params: z.unknown().optional(),
   })
   .passthrough();
 
@@ -116,6 +128,10 @@ const SessionUpdateParamsSchema = z
     content: z.unknown().optional(),
   })
   .passthrough();
+
+const DENIED_PERMISSION_RESULT = { outcome: "denied" };
+const AFK_PERMISSION_TRANSCRIPT =
+  "[acp permission] denied session/request_permission by AFK-safe policy\n";
 
 interface PendingRequest {
   resolve(result: unknown): void;
@@ -307,6 +323,15 @@ class StdioAcpClient implements AcpClient {
       return;
     }
 
+    const serverRequest = JsonRpcServerRequestSchema.safeParse(decoded);
+    if (serverRequest.success) {
+      this.consumeServerRequest(
+        serverRequest.data.id,
+        serverRequest.data.method,
+      );
+      return;
+    }
+
     const notification = JsonRpcNotificationSchema.safeParse(decoded);
     if (notification.success) {
       this.consumeNotification(
@@ -334,6 +359,34 @@ class StdioAcpClient implements AcpClient {
       return;
     }
     pending.resolve(result);
+  }
+
+  private consumeServerRequest(id: string | number, method: string): void {
+    if (method === "session/request_permission") {
+      this.updates.push({
+        type: "transcript",
+        text: AFK_PERMISSION_TRANSCRIPT,
+      });
+      this.respond(id, DENIED_PERMISSION_RESULT);
+      return;
+    }
+    this.respondError(id, -32601, `Unsupported ACP server request: ${method}`);
+  }
+
+  private respond(id: string | number, result: unknown): void {
+    this.proc.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`,
+    );
+  }
+
+  private respondError(
+    id: string | number,
+    code: number,
+    message: string,
+  ): void {
+    this.proc.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })}\n`,
+    );
   }
 
   private consumeNotification(method: string, params: unknown): void {

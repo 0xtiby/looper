@@ -31,6 +31,14 @@ describe("v2 documentation surface", () => {
     );
   });
 
+  it("CONTEXT documents the default AFK permission policy", async () => {
+    const context = await readFile("docs/CONTEXT.md", "utf8");
+
+    expect(context).toContain(
+      "The default ACP `session/request_permission` policy is deny",
+    );
+  });
+
   it("documentation says users can configure ACP Agent Servers without built-in adapters", async () => {
     const context = await readFile("docs/CONTEXT.md", "utf8");
     const readme = await readFile("README.md", "utf8");

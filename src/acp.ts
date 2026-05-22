@@ -18,8 +18,16 @@ export interface AcpSessionInput {
   cwd: string;
 }
 
+export interface AcpSessionConfigOption {
+  id: string;
+  category: string;
+  values: string[];
+  value: string | null;
+}
+
 export interface AcpSession {
   sessionId: string;
+  configOptions: AcpSessionConfigOption[];
 }
 
 export interface AcpTextContent {
@@ -32,6 +40,16 @@ export interface AcpPromptInput {
   content: AcpTextContent[];
 }
 
+export interface AcpSetConfigOptionInput {
+  sessionId: string;
+  optionId: string;
+  value: string;
+}
+
+export interface AcpSetConfigOptionResult {
+  configOptions: AcpSessionConfigOption[];
+}
+
 export type AcpSessionEvent =
   | { type: "assistant_text"; text: string }
   | { type: "transcript"; text: string };
@@ -39,6 +57,9 @@ export type AcpSessionEvent =
 export interface AcpClient {
   initialize(): Promise<void>;
   newSession(input: AcpSessionInput): Promise<AcpSession>;
+  setConfigOption?(
+    input: AcpSetConfigOptionInput,
+  ): Promise<AcpSetConfigOptionResult>;
   prompt(input: AcpPromptInput): AsyncIterable<AcpSessionEvent>;
   close(): Promise<void>;
 }
@@ -106,10 +127,45 @@ const JsonRpcNotificationSchema = z
   })
   .passthrough();
 
+const AcpSessionConfigOptionSchema = z
+  .object({
+    id: z.string().optional(),
+    optionId: z.string().optional(),
+    category: z.string(),
+    values: z.array(z.string()).optional(),
+    allowedValues: z.array(z.string()).optional(),
+    value: z.string().nullable().optional(),
+    currentValue: z.string().nullable().optional(),
+  })
+  .passthrough()
+  .transform((option, ctx): AcpSessionConfigOption => {
+    const id = option.id ?? option.optionId;
+    if (!id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ACP config option is missing an id",
+      });
+      return z.NEVER;
+    }
+    return {
+      id,
+      category: option.category,
+      values: option.values ?? option.allowedValues ?? [],
+      value: option.value ?? option.currentValue ?? null,
+    };
+  });
+
 const SessionNewResultSchema = z
   .object({
     sessionId: z.string().optional(),
     session_id: z.string().optional(),
+    configOptions: z.array(AcpSessionConfigOptionSchema).optional().default([]),
+  })
+  .passthrough();
+
+const SetConfigOptionResultSchema = z
+  .object({
+    configOptions: z.array(AcpSessionConfigOptionSchema).optional().default([]),
   })
   .passthrough();
 
@@ -252,7 +308,24 @@ class StdioAcpClient implements AcpClient {
     if (!sessionId) {
       throw new AcpProtocolError("session/new returned an invalid session id");
     }
-    return { sessionId };
+    return { sessionId, configOptions: parsed.data.configOptions };
+  }
+
+  async setConfigOption(
+    input: AcpSetConfigOptionInput,
+  ): Promise<AcpSetConfigOptionResult> {
+    const result = await this.request("session/set_config_option", {
+      sessionId: input.sessionId,
+      optionId: input.optionId,
+      value: input.value,
+    });
+    const parsed = SetConfigOptionResultSchema.safeParse(result);
+    if (!parsed.success) {
+      throw new AcpProtocolError(
+        "session/set_config_option returned invalid config options",
+      );
+    }
+    return { configOptions: parsed.data.configOptions };
   }
 
   async *prompt(input: AcpPromptInput): AsyncGenerator<AcpSessionEvent> {

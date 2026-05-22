@@ -35,7 +35,6 @@ import {
   IncompatibleAgentError as PreflightIncompatibleAgentError,
   preflight,
   UnavailableAgentError,
-  UnsupportedModelError,
 } from "./preflight.js";
 import { resolveRegistryAgentServer } from "./registry.js";
 import {
@@ -274,8 +273,7 @@ program
       if (
         err instanceof MissingAgentError ||
         err instanceof UnavailableAgentError ||
-        err instanceof PreflightIncompatibleAgentError ||
-        err instanceof UnsupportedModelError
+        err instanceof PreflightIncompatibleAgentError
       ) {
         console.error(err.message);
         process.exit(1);
@@ -403,8 +401,7 @@ program
       if (
         err instanceof MissingAgentError ||
         err instanceof UnavailableAgentError ||
-        err instanceof PreflightIncompatibleAgentError ||
-        err instanceof UnsupportedModelError
+        err instanceof PreflightIncompatibleAgentError
       ) {
         console.error(err.message);
         process.exit(1);

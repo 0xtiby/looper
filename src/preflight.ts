@@ -27,22 +27,13 @@ export class IncompatibleAgentError extends Error {
   }
 }
 
-export class UnsupportedModelError extends Error {
-  constructor(agentId: string, model: string, supportedModels: string[]) {
-    super(
-      `Model "${model}" is not supported by Agent "${agentId}". Supported models: ${supportedModels.join(", ")}.`,
-    );
-    this.name = "UnsupportedModelError";
-  }
-}
-
 export interface PreflightDeps {
   discoverAgents: () => Promise<AcpAgent[]>;
 }
 
 export async function preflight(
   agentId: string,
-  model: string | undefined,
+  _model: string | undefined,
   deps: PreflightDeps,
 ): Promise<void> {
   const agents = await deps.discoverAgents();
@@ -58,9 +49,5 @@ export async function preflight(
 
   if (!agent.isAfkSafe) {
     throw new IncompatibleAgentError(agentId);
-  }
-
-  if (model && model !== "default" && !agent.supportedModels.includes(model)) {
-    throw new UnsupportedModelError(agentId, model, agent.supportedModels);
   }
 }

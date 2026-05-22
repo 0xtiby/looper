@@ -5,7 +5,6 @@ import {
   MissingAgentError,
   preflight,
   UnavailableAgentError,
-  UnsupportedModelError,
 } from "./preflight.js";
 
 function agent(overrides: Partial<AcpAgent> & Pick<AcpAgent, "id">): AcpAgent {
@@ -49,7 +48,7 @@ describe("preflight", () => {
     ).rejects.toThrow(IncompatibleAgentError);
   });
 
-  it("throws UnsupportedModelError when the model is not in the agent's supported list", async () => {
+  it("leaves Model override support to ACP session config validation", async () => {
     await expect(
       preflight("claude", "bogus-model", {
         discoverAgents: async () => [
@@ -59,7 +58,7 @@ describe("preflight", () => {
           }),
         ],
       }),
-    ).rejects.toThrow(UnsupportedModelError);
+    ).resolves.toBeUndefined();
   });
 
   it("passes when agent is available, compatible, and model is 'default'", async () => {

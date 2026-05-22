@@ -7,8 +7,12 @@ import type {
 import { spawn as spawnCli } from "@0xtiby/spawner";
 import {
   type AcpAgentServerLaunch,
+  type AcpClient,
   type AcpClientFactory,
   type AcpClientInput,
+  AcpProtocolError,
+  type AcpSession,
+  type AcpSessionConfigOption,
   type AcpSessionEvent,
   createAcpStdioClient,
 } from "./acp.js";
@@ -78,6 +82,7 @@ export interface LoopOptions {
   prompt: string;
   cwd: string;
   model?: string;
+  mode?: string;
   maxIterations?: number;
   sentinel?: string;
   vars?: Record<string, string>;
@@ -111,6 +116,24 @@ const SPAWNER_CLI_NAMES = [
 const DEFAULT_MAX_ITERATIONS = 10;
 const DEFAULT_SENTINEL = ":::LOOPER_DONE:::";
 
+class MissingAcpConfigOptionError extends Error {
+  constructor(category: string, value: string) {
+    super(
+      `ACP session does not expose a ${category} config option for override "${value}".`,
+    );
+    this.name = "MissingAcpConfigOptionError";
+  }
+}
+
+class UnsupportedAcpConfigOptionValueError extends Error {
+  constructor(category: string, value: string, option: AcpSessionConfigOption) {
+    super(
+      `${capitalize(category)} override "${value}" is not supported by ACP config option "${option.id}". Supported values: ${option.values.join(", ")}.`,
+    );
+    this.name = "UnsupportedAcpConfigOptionValueError";
+  }
+}
+
 export async function loop(
   options: LoopOptions,
   deps: LoopDeps = {},
@@ -143,6 +166,7 @@ export async function loop(
             number,
             onOutput: options.onOutput,
             signal: options.signal,
+            configOverrides: acpConfigOverridesFromOptions(options),
           },
         )
       : await runIteration(
@@ -175,11 +199,17 @@ export async function loop(
   return { iterations, stopReason: "max_iterations" };
 }
 
+interface AcpConfigOverride {
+  category: "model" | "mode";
+  value: string;
+}
+
 interface IterationContext {
   sentinel: string;
   number: number;
   onOutput?: (chunk: string) => void;
   signal?: AbortSignal;
+  configOverrides?: AcpConfigOverride[];
 }
 
 function buildVars(
@@ -211,8 +241,13 @@ async function runAcpIteration(
   try {
     await client.initialize();
     const session = await client.newSession({ cwd: input.cwd });
+    const configuredSession = await applyAcpSessionConfigOverrides(
+      client,
+      session,
+      ctx.configOverrides ?? [],
+    );
     for await (const event of client.prompt({
-      sessionId: session.sessionId,
+      sessionId: configuredSession.sessionId,
       content: [{ type: "text", text: prompt }],
     })) {
       const chunk = acpTranscriptChunk(event);
@@ -255,6 +290,78 @@ async function runAcpIteration(
   } finally {
     await client.close();
   }
+}
+
+function acpConfigOverridesFromOptions(
+  options: LoopOptions,
+): AcpConfigOverride[] {
+  const overrides: AcpConfigOverride[] = [];
+  if (options.model !== undefined) {
+    overrides.push({ category: "model", value: options.model });
+  }
+  if (options.mode !== undefined) {
+    overrides.push({ category: "mode", value: options.mode });
+  }
+  return overrides;
+}
+
+async function applyAcpSessionConfigOverrides(
+  client: AcpClient,
+  session: AcpSession,
+  overrides: AcpConfigOverride[],
+): Promise<AcpSession> {
+  let currentSession = session;
+  for (const override of overrides) {
+    currentSession = await applyAcpSessionConfigOverride(
+      client,
+      currentSession,
+      override,
+    );
+  }
+  return currentSession;
+}
+
+async function applyAcpSessionConfigOverride(
+  client: AcpClient,
+  session: AcpSession,
+  override: AcpConfigOverride,
+): Promise<AcpSession> {
+  const option = session.configOptions.find(
+    (candidate) => candidate.category === override.category,
+  );
+  if (!option) {
+    throw new MissingAcpConfigOptionError(override.category, override.value);
+  }
+  if (!option.values.includes(override.value)) {
+    throw new UnsupportedAcpConfigOptionValueError(
+      override.category,
+      override.value,
+      option,
+    );
+  }
+  if (!client.setConfigOption) {
+    throw new AcpProtocolError(
+      "ACP client does not support session/set_config_option",
+    );
+  }
+  const result = await client.setConfigOption({
+    sessionId: session.sessionId,
+    optionId: option.id,
+    value: override.value,
+  });
+  return {
+    ...session,
+    configOptions:
+      result.configOptions.length > 0
+        ? result.configOptions
+        : session.configOptions,
+  };
+}
+
+function capitalize(value: string): string {
+  const [first, ...rest] = value;
+  if (first === undefined) return value;
+  return `${first.toUpperCase()}${rest.join("")}`;
 }
 
 function acpTranscriptChunk(event: AcpSessionEvent): string {

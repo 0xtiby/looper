@@ -45,6 +45,50 @@ describe("ACP stdio client", () => {
     expect(received).toEqual(["Agent saw: build the slice"]);
   });
 
+  it("sets ACP session config options before prompting", async () => {
+    const client = createAcpStdioClient({
+      server: {
+        type: "custom",
+        command: process.execPath,
+        args: ["-e", fakeConfigOptionServerScript()],
+      },
+      cwd: workDir,
+    });
+
+    await client.initialize();
+    const session = await client.newSession({ cwd: workDir });
+    expect(session.configOptions).toContainEqual({
+      id: "model-option",
+      category: "model",
+      values: ["sonnet", "opus"],
+      value: "sonnet",
+    });
+    expect(client.setConfigOption).toBeDefined();
+    if (!client.setConfigOption) return;
+
+    const updated = await client.setConfigOption({
+      sessionId: session.sessionId,
+      optionId: "model-option",
+      value: "opus",
+    });
+    const received: string[] = [];
+    for await (const event of client.prompt({
+      sessionId: session.sessionId,
+      content: [{ type: "text", text: "run" }],
+    })) {
+      if (event.type === "assistant_text") received.push(event.text);
+    }
+    await client.close();
+
+    expect(updated.configOptions).toContainEqual({
+      id: "model-option",
+      category: "model",
+      values: ["sonnet", "opus"],
+      value: "opus",
+    });
+    expect(received).toEqual(["model=opus"]);
+  });
+
   it("emits Assistant text only for agent_message_chunk text updates", async () => {
     const client = createAcpStdioClient({
       server: {
@@ -198,6 +242,66 @@ function handle(request) {
       params: {
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: 'Agent saw: ' + request.params.content[0].text }
+      }
+    });
+    send({ jsonrpc: '2.0', id: request.id, result: {} });
+  }
+}
+`;
+}
+
+function fakeConfigOptionServerScript(): string {
+  return `
+let buffer = '';
+let model = 'sonnet';
+process.stdin.on('data', (chunk) => {
+  buffer += chunk.toString();
+  let newline = buffer.indexOf('\\n');
+  while (newline >= 0) {
+    const line = buffer.slice(0, newline);
+    buffer = buffer.slice(newline + 1);
+    if (line.trim().length > 0) handle(JSON.parse(line));
+    newline = buffer.indexOf('\\n');
+  }
+});
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + '\\n');
+}
+function configOptions() {
+  return [
+    {
+      id: 'model-option',
+      category: 'model',
+      values: ['sonnet', 'opus'],
+      value: model
+    }
+  ];
+}
+function handle(request) {
+  if (request.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: request.id, result: {} });
+    return;
+  }
+  if (request.method === 'session/new') {
+    send({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: { sessionId: 'fresh-session-1', configOptions: configOptions() }
+    });
+    return;
+  }
+  if (request.method === 'session/set_config_option') {
+    model = request.params.value;
+    send({ jsonrpc: '2.0', id: request.id, result: { configOptions: configOptions() } });
+    return;
+  }
+  if (request.method === 'session/prompt') {
+    send({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'model=' + model }
       }
     });
     send({ jsonrpc: '2.0', id: request.id, result: {} });

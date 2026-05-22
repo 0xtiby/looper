@@ -59,6 +59,279 @@ async function* acpEvents(
 }
 
 describe("loop", () => {
+  it("applies a supported Model override through ACP session config before prompting", async () => {
+    const calls: string[] = [];
+    const client = {
+      initialize: async () => {
+        calls.push("initialize");
+      },
+      newSession: async () => {
+        calls.push("session/new");
+        return {
+          sessionId: "fresh-session-1",
+          configOptions: [
+            {
+              id: "model-option",
+              category: "model",
+              values: ["sonnet", "opus"],
+              value: "sonnet",
+            },
+          ],
+        };
+      },
+      setConfigOption: async (input: {
+        sessionId: string;
+        optionId: string;
+        value: string;
+      }) => {
+        calls.push(`set:${input.sessionId}:${input.optionId}:${input.value}`);
+        return {
+          configOptions: [
+            {
+              id: input.optionId,
+              category: "model",
+              values: ["sonnet", "opus"],
+              value: input.value,
+            },
+          ],
+        };
+      },
+      prompt: (input: { sessionId: string; content: { text: string }[] }) => {
+        calls.push(`prompt:${input.sessionId}:${input.content[0]?.text}`);
+        return acpEvents([{ type: "assistant_text", text: "done" }]);
+      },
+      close: async () => {
+        calls.push("close");
+      },
+    };
+    const createAcpClient: AcpClientFactory = () => client;
+
+    await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        model: "opus",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(calls).toEqual([
+      "initialize",
+      "session/new",
+      "set:fresh-session-1:model-option:opus",
+      "prompt:fresh-session-1:do the thing",
+      "close",
+    ]);
+  });
+
+  it("fails a Model override before prompting when ACP allowed values reject it", async () => {
+    const calls: string[] = [];
+    const createAcpClient: AcpClientFactory = () => ({
+      initialize: async () => {
+        calls.push("initialize");
+      },
+      newSession: async () => {
+        calls.push("session/new");
+        return {
+          sessionId: "fresh-session-1",
+          configOptions: [
+            {
+              id: "model-option",
+              category: "model",
+              values: ["sonnet", "opus"],
+              value: "sonnet",
+            },
+          ],
+        };
+      },
+      setConfigOption: async () => {
+        calls.push("set");
+        return { configOptions: [] };
+      },
+      prompt: () => {
+        calls.push("prompt");
+        return acpEvents([{ type: "assistant_text", text: "should not run" }]);
+      },
+      close: async () => {
+        calls.push("close");
+      },
+    });
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        model: "haiku",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(calls).toEqual(["initialize", "session/new", "close"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.iterations[0]?.error?.message).toContain(
+      'Model override "haiku" is not supported',
+    );
+  });
+
+  it("fails a Model override before prompting when the ACP session has no model config option", async () => {
+    const calls: string[] = [];
+    const createAcpClient: AcpClientFactory = () => ({
+      initialize: async () => {
+        calls.push("initialize");
+      },
+      newSession: async () => {
+        calls.push("session/new");
+        return {
+          sessionId: "fresh-session-1",
+          configOptions: [
+            {
+              id: "permission-mode",
+              category: "mode",
+              values: ["default"],
+              value: "default",
+            },
+          ],
+        };
+      },
+      setConfigOption: async () => {
+        calls.push("set");
+        return { configOptions: [] };
+      },
+      prompt: () => {
+        calls.push("prompt");
+        return acpEvents([{ type: "assistant_text", text: "should not run" }]);
+      },
+      close: async () => {
+        calls.push("close");
+      },
+    });
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        model: "opus",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(calls).toEqual(["initialize", "session/new", "close"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.iterations[0]?.error?.message).toContain(
+      'ACP session does not expose a model config option for override "opus"',
+    );
+  });
+
+  it("uses changed ACP config option state after setting a Model override", async () => {
+    const calls: string[] = [];
+    const client = {
+      initialize: async () => {
+        calls.push("initialize");
+      },
+      newSession: async () => {
+        calls.push("session/new");
+        return {
+          sessionId: "fresh-session-1",
+          configOptions: [
+            {
+              id: "model-option",
+              category: "model",
+              values: ["sonnet", "opus"],
+              value: "sonnet",
+            },
+            {
+              id: "mode-option",
+              category: "mode",
+              values: ["fast"],
+              value: "fast",
+            },
+          ],
+        };
+      },
+      setConfigOption: async (input: {
+        sessionId: string;
+        optionId: string;
+        value: string;
+      }) => {
+        calls.push(`set:${input.optionId}:${input.value}`);
+        if (input.optionId === "model-option") {
+          return {
+            configOptions: [
+              {
+                id: "model-option",
+                category: "model",
+                values: ["sonnet", "opus"],
+                value: input.value,
+              },
+              {
+                id: "mode-option",
+                category: "mode",
+                values: ["plan"],
+                value: "fast",
+              },
+            ],
+          };
+        }
+        return {
+          configOptions: [
+            {
+              id: "model-option",
+              category: "model",
+              values: ["sonnet", "opus"],
+              value: "opus",
+            },
+            {
+              id: input.optionId,
+              category: "mode",
+              values: ["plan"],
+              value: input.value,
+            },
+          ],
+        };
+      },
+      prompt: (input: { sessionId: string; content: { text: string }[] }) => {
+        calls.push(`prompt:${input.sessionId}:${input.content[0]?.text}`);
+        return acpEvents([{ type: "assistant_text", text: "done" }]);
+      },
+      close: async () => {
+        calls.push("close");
+      },
+    };
+    const createAcpClient: AcpClientFactory = () => client;
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "do the thing",
+        cwd: "/work",
+        model: "opus",
+        mode: "plan",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(calls).toEqual([
+      "initialize",
+      "session/new",
+      "set:model-option:opus",
+      "set:mode-option:plan",
+      "prompt:fresh-session-1:do the thing",
+      "close",
+    ]);
+    expect(result.stopReason).toBe("max_iterations");
+  });
+
   it("runs a Fresh ACP session for a custom Agent Server", async () => {
     const calls: string[] = [];
     const client: AcpClient = {
@@ -67,7 +340,7 @@ describe("loop", () => {
       },
       newSession: async (input) => {
         calls.push(`session/new:${input.cwd}`);
-        return { sessionId: "fresh-session-1" };
+        return { sessionId: "fresh-session-1", configOptions: [] };
       },
       prompt: (input) => {
         calls.push(
@@ -114,7 +387,10 @@ describe("loop", () => {
   it("stops an ACP Run when the Sentinel appears in Assistant text", async () => {
     const createAcpClient = vi.fn<AcpClientFactory>(() => ({
       initialize: async () => {},
-      newSession: async () => ({ sessionId: "fresh-session-1" }),
+      newSession: async () => ({
+        sessionId: "fresh-session-1",
+        configOptions: [],
+      }),
       prompt: () =>
         acpEvents([
           { type: "assistant_text", text: "complete :::LOOPER_DONE:::" },
@@ -141,7 +417,10 @@ describe("loop", () => {
   it("does not stop an ACP Run when the Sentinel appears in transcript progress", async () => {
     const createAcpClient: AcpClientFactory = () => ({
       initialize: async () => {},
-      newSession: async () => ({ sessionId: "fresh-session-1" }),
+      newSession: async () => ({
+        sessionId: "fresh-session-1",
+        configOptions: [],
+      }),
       prompt: () =>
         acpEvents([
           { type: "transcript", text: "[acp tool_call] :::LOOPER_DONE:::" },
@@ -169,7 +448,10 @@ describe("loop", () => {
   it("keeps ACP transcript progress in stdout without making it Sentinel-eligible", async () => {
     const createAcpClient: AcpClientFactory = () => ({
       initialize: async () => {},
-      newSession: async () => ({ sessionId: "fresh-session-1" }),
+      newSession: async () => ({
+        sessionId: "fresh-session-1",
+        configOptions: [],
+      }),
       prompt: () =>
         acpEvents([
           { type: "transcript", text: "[acp tool_call] running tests\n" },

@@ -1,39 +1,75 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { CliName } from "@0xtiby/spawner";
+import { createInterface } from "node:readline";
 import { Command, InvalidArgumentError, Option } from "commander";
+import type { AcpAgentServerLaunch } from "./acp.js";
 import {
+  discoverAcpAgents,
+  discoverConfiguredAgents,
+  formatAgentListingJson,
+  formatAgentListingText,
+  type ListedAgent,
+  listAgents,
+} from "./agents.js";
+import {
+  type AgentId,
+  AgentIdSchema,
   applyOverrides,
-  CliNameSchema,
+  BuiltInAgentIdSchema,
+  DEFAULT_CONFIG,
   loadConfig,
+  type ResolvedConfig,
   resolveConfig,
-  writeDefaultConfig,
+  writeConfig,
 } from "./config.js";
 import { type LoopResult, loop } from "./index.js";
 import {
-  finalizeSession,
+  IncompatibleAgentError,
+  NonInteractiveInitError,
+  resolveInitAgent,
+  UnknownAgentError,
+} from "./init.js";
+import { formatRunInspectionJson } from "./inspect.js";
+import {
+  MissingAgentError,
+  IncompatibleAgentError as PreflightIncompatibleAgentError,
+  preflight,
+  UnavailableAgentError,
+} from "./preflight.js";
+import { resolveRegistryAgentServer } from "./registry.js";
+import {
+  type AcpAgentServerSnapshot,
+  applyResumeOverride,
+  finalizeRun,
+  hasResumeHistory,
   type IterationRecord,
-  listInterruptedSessions,
-  newActiveSession,
-  readSession,
-  type Session,
-  sessionBasename,
-  writeSession,
-} from "./session.js";
+  listNonCompleteRuns,
+  newActiveRun,
+  type Run,
+  readRun,
+  runBasename,
+  snapshotAcpAgentServer,
+  writeRun,
+} from "./run.js";
 import { loadPrompt } from "./template.js";
 
-const SUPPORTED_CLIS: CliName[] = [...CliNameSchema.options];
+const SUPPORTED_AGENTS = [...BuiltInAgentIdSchema.options];
 
 interface RunCommandOptions {
   prompt?: string;
   promptStdin?: boolean;
-  cli?: CliName;
+  agent?: AgentId;
   model?: string;
   maxIterations?: number;
   sentinel?: string;
   var?: Record<string, string>;
   cwd?: string;
+}
+
+interface ResumeCommandOptions {
+  agent?: AgentId;
+  model?: string;
 }
 
 function parsePositiveInt(value: string): number {
@@ -57,6 +93,31 @@ function collectVar(
   return { ...previous, [key]: val };
 }
 
+async function ttySelectAgent(agents: ListedAgent[]): Promise<AgentId> {
+  return new Promise((resolve, reject) => {
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    console.log("Compatible agents:");
+    agents.forEach((agent, i) => {
+      console.log(`  ${i + 1}. ${agent.displayName} (${agent.id})`);
+    });
+
+    rl.question(`Select an agent (1-${agents.length}): `, (answer) => {
+      rl.close();
+      const index = Number.parseInt(answer, 10) - 1;
+      const selected = agents[index];
+      if (selected) {
+        resolve(AgentIdSchema.parse(selected.id));
+      } else {
+        reject(new Error("Invalid selection"));
+      }
+    });
+  });
+}
+
 function formatTranscript(result: LoopResult): string {
   const parts: string[] = [];
   for (const iter of result.iterations) {
@@ -75,14 +136,14 @@ function formatTranscript(result: LoopResult): string {
 }
 
 async function persistTranscript(
-  session: Pick<Session, "id" | "startedAt">,
+  run: Pick<Run, "id" | "startedAt">,
   result: LoopResult,
   cwd: string,
   mode: "write" | "append",
 ): Promise<void> {
-  const sessionsDir = path.join(cwd, ".looper", "sessions");
-  await mkdir(sessionsDir, { recursive: true });
-  const logPath = path.join(sessionsDir, `${sessionBasename(session)}.log`);
+  const runsDir = path.join(cwd, ".looper", "runs");
+  await mkdir(runsDir, { recursive: true });
+  const logPath = path.join(runsDir, `${runBasename(run)}.log`);
   const body = formatTranscript(result);
   if (mode === "append") {
     await appendFile(logPath, body, "utf8");
@@ -103,11 +164,6 @@ function toIterationRecords(result: LoopResult): IterationRecord[] {
   }));
 }
 
-function describePromptSource(options: RunCommandOptions): string {
-  if (options.promptStdin) return "<stdin>";
-  return options.prompt ?? "";
-}
-
 function resolveModel(model: string | null | undefined): string | undefined {
   if (!model || model === "default") return undefined;
   return model;
@@ -122,6 +178,45 @@ function exitCodeForResult(result: LoopResult): number {
   return 0;
 }
 
+class ConfiguredAgentServerError extends Error {
+  constructor(agent: string) {
+    super(`Agent "${agent}" is not configured in agent_servers.`);
+    this.name = "ConfiguredAgentServerError";
+  }
+}
+
+interface ResolvedAgentServerContext {
+  snapshot: AcpAgentServerSnapshot;
+  launch: AcpAgentServerLaunch;
+}
+
+async function resolveAgentServer(
+  config: ResolvedConfig,
+): Promise<ResolvedAgentServerContext> {
+  const agentServer = config.agentServers[config.agent];
+  if (!agentServer) throw new ConfiguredAgentServerError(config.agent);
+  const launch =
+    agentServer.type === "custom"
+      ? agentServer
+      : (await resolveRegistryAgentServer(agentServer, undefined, config.agent))
+          .launch;
+  return {
+    snapshot: snapshotAcpAgentServer({
+      id: config.agent,
+      config: agentServer,
+      launch,
+    }),
+    launch,
+  };
+}
+
+async function preflightBuiltInAgent(config: ResolvedConfig): Promise<void> {
+  if (!BuiltInAgentIdSchema.safeParse(config.agent).success) return;
+  await preflight(config.agent, config.model, {
+    discoverAgents: discoverAcpAgents,
+  });
+}
+
 const program = new Command();
 
 program
@@ -130,13 +225,30 @@ program
   .version("0.0.0");
 
 program
+  .command("agents")
+  .description("List discovered ACP Agents")
+  .option("--json", "print detailed Agent metadata as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const fileConfig = await loadConfig(process.cwd());
+    const agents = await listAgents(() => {
+      if (fileConfig?.agent_servers) {
+        return discoverConfiguredAgents(fileConfig.agent_servers);
+      }
+      return discoverAcpAgents();
+    });
+    if (options.json) {
+      process.stdout.write(formatAgentListingJson(agents));
+      return;
+    }
+    console.log(formatAgentListingText(agents));
+  });
+
+program
   .command("run")
-  .description("Run the loop against an AI CLI")
+  .description("Run the loop against an AI Agent")
   .option("-p, --prompt <value>", "inline string or path to a prompt file")
   .option("--prompt-stdin", "read the prompt from stdin")
-  .addOption(
-    new Option("--cli <name>", "AI CLI to spawn").choices(SUPPORTED_CLIS),
-  )
+  .addOption(new Option("--agent <id>", "Agent id to run"))
   .option("--model <name>", "model override")
   .option(
     "--max-iterations <n>",
@@ -144,7 +256,7 @@ program
     parsePositiveInt,
   )
   .option("--sentinel <string>", "string that marks loop completion in output")
-  .option("--cwd <path>", "working directory for the spawned CLI")
+  .option("--cwd <path>", "working directory for the spawned Agent")
   .option("--var <KEY=VALUE>", "template variable (repeatable)", collectVar)
   .action(async (options: RunCommandOptions) => {
     if (!options.prompt && !options.promptStdin) {
@@ -159,11 +271,27 @@ program
 
     const fileConfig = await loadConfig(hostCwd);
     const resolved = applyOverrides(resolveConfig(fileConfig), {
-      cli: options.cli,
+      agent: options.agent,
       model: options.model,
       maxIterations: options.maxIterations,
       sentinel: options.sentinel,
     });
+
+    const agentServer = await resolveAgentServer(resolved);
+
+    try {
+      await preflightBuiltInAgent(resolved);
+    } catch (err) {
+      if (
+        err instanceof MissingAgentError ||
+        err instanceof UnavailableAgentError ||
+        err instanceof PreflightIncompatibleAgentError
+      ) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      throw err;
+    }
 
     const prompt = await loadPrompt({
       value: options.prompt,
@@ -173,16 +301,17 @@ program
 
     const vars = { ...resolved.vars, ...(options.var ?? {}) };
 
-    const sessionId = randomUUID();
-    const session = newActiveSession({
-      id: sessionId,
-      prompt: describePromptSource(options),
-      cli: resolved.cli,
+    const runId = randomUUID();
+    const run = newActiveRun({
+      id: runId,
+      prompt,
+      agent: resolved.agent,
+      agentServer: agentServer.snapshot,
       model: resolved.model,
       maxIterations: resolved.maxIterations,
       vars,
     });
-    await writeSession(session, hostCwd);
+    await writeRun(run, hostCwd);
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -191,14 +320,15 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        cli: resolved.cli,
+        agent: resolved.agent,
+        agentServer: agentServer.launch,
         prompt,
         cwd: spawnerCwd,
         model: resolveModel(resolved.model),
         maxIterations: resolved.maxIterations,
         sentinel: resolved.sentinel,
         vars,
-        sessionId,
+        runId,
         signal: controller.signal,
         onOutput: (chunk) => {
           process.stdout.write(chunk);
@@ -208,60 +338,98 @@ program
       process.off("SIGINT", onSigint);
     }
 
-    const finalized = finalizeSession(
-      session,
+    const finalized = finalizeRun(
+      run,
       result.stopReason,
       toIterationRecords(result),
     );
-    await writeSession(finalized, hostCwd);
-    await persistTranscript(session, result, hostCwd, "write");
+    await writeRun(finalized, hostCwd);
+    await persistTranscript(run, result, hostCwd, "write");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);
   });
 
 program
-  .command("resume [session-id]")
-  .description("Resume an interrupted session (or list them with no id)")
-  .action(async (sessionId?: string) => {
+  .command("resume [run-id]")
+  .description("Resume an interrupted run (or list them with no id)")
+  .addOption(new Option("--agent <id>", "Agent override for the resumed run"))
+  .option("--model <name>", "model override for the resumed run")
+  .action(async (runId: string | undefined, options: ResumeCommandOptions) => {
     const cwd = process.cwd();
 
-    if (!sessionId) {
-      const sessions = await listInterruptedSessions(cwd);
-      if (sessions.length === 0) {
-        console.log("No interrupted sessions.");
+    if (!runId) {
+      const runs = await listNonCompleteRuns(cwd);
+      if (runs.length === 0) {
+        console.log("No non-complete runs.");
         return;
       }
-      for (const s of sessions) {
-        const preview =
-          s.prompt.length > 60 ? `${s.prompt.slice(0, 60)}…` : s.prompt;
-        const shortId = s.id.slice(0, 8);
+      for (const r of runs) {
+        const shortId = r.id.slice(0, 8);
+        const stopReason = r.stopReason ?? "active";
+        const progress = `${r.iterations.length}/${r.maxIterations}`;
+        const historyIndicator = hasResumeHistory(r) ? " [resumed]" : "";
         console.log(
-          `${shortId}  ${s.startedAt}  (${s.iterations.length} done)  ${preview}`,
+          `${shortId}  ${r.startedAt}  ${stopReason}  ${r.agent}${historyIndicator}  ${progress}`,
         );
       }
       return;
     }
 
-    const session = await readSession(cwd, sessionId);
-    if (!session) {
-      console.error(`Session ${sessionId} not found`);
+    const run = await readRun(cwd, runId);
+    if (!run) {
+      console.error(`Run ${runId} not found`);
       process.exit(1);
     }
-    if (session.state !== "interrupted") {
-      console.error(
-        `Session ${sessionId} is ${session.state}, not interrupted`,
-      );
-      process.exit(1);
-    }
-    if (session.prompt === "<stdin>") {
-      console.error("Cannot resume sessions whose prompt came from stdin");
+    if (run.state === "completed") {
+      console.error(`Run ${runId} is already complete`);
       process.exit(1);
     }
 
     const fileConfig = await loadConfig(cwd);
     const resolved = resolveConfig(fileConfig);
-    const prompt = await loadPrompt({ value: session.prompt });
+    const overrideAgentServer = options.agent
+      ? await resolveAgentServer({
+          ...resolved,
+          agent: options.agent,
+          model: options.model ?? resolved.model,
+        })
+      : null;
+    const resumedRun = applyResumeOverride(run, {
+      agent: options.agent,
+      agentServer: overrideAgentServer?.snapshot,
+      model: options.model,
+    });
+
+    const agentServer =
+      resumedRun.agentServer?.launch ??
+      (
+        await resolveAgentServer({
+          ...resolved,
+          agent: resumedRun.agent,
+          model: resumedRun.model ?? resolved.model,
+        })
+      ).launch;
+
+    try {
+      await preflightBuiltInAgent({
+        ...resolved,
+        agent: resumedRun.agent,
+        model: resumedRun.model ?? resolved.model,
+      });
+    } catch (err) {
+      if (
+        err instanceof MissingAgentError ||
+        err instanceof UnavailableAgentError ||
+        err instanceof PreflightIncompatibleAgentError
+      ) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      throw err;
+    }
+
+    const prompt = resumedRun.resolvedPrompt;
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -270,16 +438,17 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        cli: session.cli,
+        agent: resumedRun.agent,
+        agentServer,
         prompt,
         cwd,
-        model: resolveModel(session.model ?? resolved.model),
-        maxIterations: session.maxIterations,
+        model: resolveModel(resumedRun.model),
+        maxIterations: resumedRun.maxIterations,
         sentinel: resolved.sentinel,
-        vars: { ...resolved.vars, ...session.vars },
-        sessionId: session.id,
+        vars: { ...resolved.vars, ...resumedRun.vars },
+        runId: resumedRun.id,
         signal: controller.signal,
-        startIteration: session.iterations.length + 1,
+        startIteration: resumedRun.iterations.length + 1,
         onOutput: (chunk) => {
           process.stdout.write(chunk);
         },
@@ -289,29 +458,78 @@ program
     }
 
     const mergedIterations = [
-      ...session.iterations,
+      ...resumedRun.iterations,
       ...toIterationRecords(result),
     ];
-    const finalized = finalizeSession(
-      session,
+    const finalized = finalizeRun(
+      resumedRun,
       result.stopReason,
       mergedIterations,
     );
-    await writeSession(finalized, cwd);
-    await persistTranscript(session, result, cwd, "append");
+    await writeRun(finalized, cwd);
+    await persistTranscript(resumedRun, result, cwd, "append");
 
     const code = exitCodeForResult(result);
     if (code !== 0) process.exit(code);
   });
 
 program
+  .command("inspect <run-id>")
+  .description("Show persisted context and resume history for a run")
+  .action(async (runId: string) => {
+    const cwd = process.cwd();
+    const run = await readRun(cwd, runId);
+    if (!run) {
+      console.error(`Run ${runId} not found`);
+      process.exit(1);
+    }
+    process.stdout.write(formatRunInspectionJson(run));
+  });
+
+program
   .command("init")
-  .description("Write a default .looper/config.json (no overwrite)")
-  .action(async () => {
+  .description("Initialize .looper/config.json with a configured agent")
+  .addOption(
+    new Option(
+      "--agent <id>",
+      "Agent id to set as default (non-interactive)",
+    ).choices(SUPPORTED_AGENTS),
+  )
+  .action(async (options: { agent?: AgentId }) => {
+    const cwd = process.cwd();
+
+    const existing = await loadConfig(cwd);
+    if (existing !== null) {
+      console.error("Config file already exists");
+      process.exit(1);
+    }
+
     try {
-      const file = await writeDefaultConfig(process.cwd());
+      const agent = await resolveInitAgent({
+        agent: options.agent,
+        deps: {
+          isTty: process.stdin.isTTY === true,
+          listAgents: async () => listAgents(discoverAcpAgents),
+          selectAgent: ttySelectAgent,
+        },
+      });
+      const file = await writeConfig(cwd, {
+        agent,
+        model: DEFAULT_CONFIG.model,
+        maxIterations: DEFAULT_CONFIG.maxIterations,
+        sentinel: DEFAULT_CONFIG.sentinel,
+        vars: DEFAULT_CONFIG.vars,
+      });
       console.log(`Wrote ${file}`);
     } catch (err) {
+      if (
+        err instanceof IncompatibleAgentError ||
+        err instanceof NonInteractiveInitError ||
+        err instanceof UnknownAgentError
+      ) {
+        console.error(err.message);
+        process.exit(1);
+      }
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }

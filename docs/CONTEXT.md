@@ -20,6 +20,22 @@ _Avoid_: fork, new product, driver-agnostic runtime
 Looper's public interface is defined directly around ACP concepts rather than a generic driver abstraction.
 _Avoid_: multi-protocol by default, driver-based UX
 
+**ACP Client**:
+Looper's role in v2: the process that launches or connects to an **ACP Agent Server** and speaks the Agent Client Protocol JSON-RPC contract.
+_Avoid_: Agent, local CLI wrapper, generic subprocess runner
+
+**ACP Agent Server**:
+An external Agent implementation that exposes the Agent Client Protocol methods Looper uses, such as `initialize`, `session/new`, and `session/prompt`.
+_Avoid_: Looper plugin, built-in adapter, ordinary CLI stdout stream
+
+**ACP Registry**:
+The Agent Client Protocol registry that publishes discoverable Agent metadata and distribution details Looper can resolve for registry-backed Agents.
+_Avoid_: Looper-maintained adapter table, Zed-only catalog
+
+**Zed-style `agent_servers`**:
+A Looper config catalog shape inspired by Zed's client settings for naming custom or registry-backed **ACP Agent Servers**; it is Looper configuration, not the ACP protocol standard itself.
+_Avoid_: protocol schema, ACP-mandated config, hardcoded built-in Agent list
+
 **Agent**:
 The primary execution target selected by a Looper user in v2.
 _Avoid_: client, runtime
@@ -139,6 +155,15 @@ _Avoid_: runnable agent
 **Init picker**:
 The agent-selection UI used during **Interactive init**.
 _Avoid_: unrestricted chooser
+
+## ACP protocol mapping
+
+- Fresh session maps to ACP `session/new`; every Looper iteration creates a new ACP session with no carried conversation state.
+- Assistant text maps to ACP `agent_message_chunk` text content received through `session/update`.
+- Sentinel ignores tool output, permission prompts, stderr logs, raw transport data, and non-text content; only **Assistant text** can satisfy the **Stop condition**.
+- The default ACP `session/request_permission` policy is deny, so **AFK-safe** Runs answer permission requests non-interactively instead of waiting for approval.
+- ACP `session/prompt` drives one prompt turn for a **Fresh session**, but ACP session shutdown is not the same thing as Looper **Run** completion.
+- Users can configure their own ACP Agent Servers rather than waiting for Looper-maintained built-in adapters.
 
 ## Relationships
 

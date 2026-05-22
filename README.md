@@ -13,22 +13,31 @@
   <a href="https://github.com/0xtiby/looper/actions/workflows/release.yml"><img src="https://github.com/0xtiby/looper/actions/workflows/release.yml/badge.svg" alt="CI status"></a>
 </p>
 
-## What Is Looper?
+## What Is Looper v2?
 
-A standalone engine for looping an AI coding CLI against a prompt until it signals it's done:
+**Looper v2** is an ACP-native runtime for repeatedly invoking an **Agent**
+against a prompt until a **Sentinel** ends the **Run**.
 
-1. You give Looper a prompt and pick a CLI (`claude`, `codex`, `opencode`, or `pi`).
-2. Looper spawns the CLI, streams its output, and watches for a sentinel string.
-3. It re-spawns from scratch each iteration until the sentinel fires, `maxIterations` is reached, or the CLI exits non-zero.
+1. You give Looper a prompt and pick an **Agent** (`claude`, `codex`,
+   `opencode`, or `pi`).
+2. Looper executes the **Agent**, streams its output, and watches for a
+   sentinel string in **assistant text**.
+3. It starts a new ACP conversation each iteration until the sentinel
+   fires, `maxIterations` is reached, or the Agent exits non-zero.
 
-Looper is **stateless** — every iteration is a fresh spawn with no shared conversation state. It has no opinions about specs, plans, trackers, git, or project structure. The prompt is the instruction.
+Looper is **stateless** — every iteration is a fresh spawn with no shared
+conversation state. It has no opinions about specs, plans, trackers, git, or
+project structure. The prompt is the instruction.
 
-Under the hood, Looper drives the CLIs via [`@0xtiby/spawner`](https://github.com/0xtiby/spawner).
+Under the hood, Looper is an **ACP Client**. It speaks ACP JSON-RPC with
+configured **ACP Agent Servers** over stdio, and the runtime contract is ACP
+messages rather than ordinary CLI stdout parsing. Users can configure their own
+ACP Agent Servers rather than waiting for Looper-maintained built-in adapters.
 
 ## Prerequisites
 
 - Node.js **20+**
-- At least one supported AI CLI installed and authenticated:
+- At least one supported Agent installed and authenticated:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Codex CLI](https://github.com/openai/codex) (`codex`)
   - [OpenCode](https://github.com/sst/opencode) (`opencode`)
@@ -43,7 +52,7 @@ Under the hood, Looper drives the CLIs via [`@0xtiby/spawner`](https://github.co
    # or: npm install @0xtiby/looper
    ```
 
-2. Scaffold a `.looper/config.json` with sensible defaults:
+2. Initialize `.looper/config.json` and pick a default Agent:
 
    ```sh
    looper init
@@ -55,25 +64,38 @@ Under the hood, Looper drives the CLIs via [`@0xtiby/spawner`](https://github.co
    looper run -p "Refactor src/auth to remove dead code. Emit :::LOOPER_DONE::: when finished."
    ```
 
-The package ships both a `looper` binary and a library (`import { loop } from "@0xtiby/looper"`). Both ESM and CommonJS are supported.
+The package ships both a `looper` binary and a library
+(`import { loop } from "@0xtiby/looper"`). Both ESM and CommonJS are
+supported.
 
 ## CLI
 
 ### `looper init`
 
-Creates `.looper/config.json` populated with the built-in defaults.
+Creates `.looper/config.json`. In a TTY, presents an **Init picker** that
+lists **Compatible Agents** first. In non-TTY mode, pass `--agent <id>`
+explicitly.
 
-### `looper config`
+### `looper agents`
 
-Prints the resolved config (defaults merged with your file).
+Lists discovered Agents with **Agent metadata** and **Capability summary**.
+Each row shows the **Agent id**, display name, status, compatibility, and
+capabilities. **Compatible Agents** (AFK-safe) are shown first, followed by
+incompatible or unavailable ones.
+
+```sh
+looper agents       # human-friendly listing
+looper agents --json # detailed ACP metadata as JSON
+```
 
 ### `looper run`
 
-Runs a loop. Exits `0` on clean completion, non-zero on CLI error, and `130` on SIGINT (Ctrl+C).
+Runs a loop. Exits `0` on clean completion, non-zero on Agent error, and `130`
+on SIGINT (Ctrl+C).
 
 ```sh
 # Inline prompt, or a path to a file (auto-detected)
-looper run -p ./plan.md --cli claude --max-iterations 5
+looper run -p ./plan.md --agent claude --max-iterations 5
 
 # Or pipe in
 cat plan.md | looper run --prompt-stdin
@@ -83,23 +105,38 @@ cat plan.md | looper run --prompt-stdin
 | --- | --- |
 | `-p, --prompt <value>` | Inline string OR path to an existing file (auto-detected). |
 | `--prompt-stdin` | Read the prompt from stdin. |
-| `--cli <name>` | One of `claude`, `codex`, `opencode`, `pi`. Overrides config. |
+| `--agent <id>` | One of `claude`, `codex`, `opencode`, `pi`. Overrides config. |
 | `--model <name>` | Model override (e.g. `opus`, `sonnet`). |
 | `--max-iterations <n>` | Cap the number of iterations. |
-| `--sentinel <string>` | String the AI must emit to stop the loop. |
-| `--cwd <path>` | Working directory passed to the spawned CLI. |
+| `--sentinel <string>` | String the Agent must emit to stop the loop. |
+| `--cwd <path>` | Working directory passed to the spawned Agent. |
 | `--var KEY=VALUE` | Template variable (repeatable — see [Template variables](#template-variables)). |
 
 ### `looper resume`
 
-If a session is aborted with Ctrl+C, the session file is marked `interrupted`. Continue it with:
+Lists **Non-complete runs** or continues one from the next iteration.
 
 ```sh
-looper resume              # lists interrupted sessions
-looper resume <session-id> # resumes the specific session
+looper resume           # lists non-complete runs
+looper resume <run-id>  # resumes the specific run
 ```
 
-Resume reuses the original prompt, CLI, and model and runs the remaining iterations (up to `maxIterations`). New iterations are appended to both the session JSON and the transcript log. Stdin-origin prompts cannot be resumed.
+Resume reuses the stored **Resolved prompt**, Agent, and model and runs the
+remaining iterations (up to `maxIterations`). New iterations are appended to
+both the run JSON and the transcript log. You may supply `--agent` or `--model`
+to apply a **Resume override** without changing the configured default.
+
+### `looper inspect`
+
+Shows persisted context and full **Resume history** for a run.
+
+```sh
+looper inspect <run-id>
+```
+
+### `looper config`
+
+Prints the resolved config (defaults merged with your file).
 
 ## Library usage
 
@@ -109,7 +146,7 @@ Resume reuses the original prompt, CLI, and model and runs the remaining iterati
 import { loop } from "@0xtiby/looper";
 
 const result = await loop({
-  cli: "claude",
+  agent: "claude",
   prompt: `
     1. Run: gh issue list --repo {{REPO}} --state open --json
     2. Pick the next unblocked issue labeled "ready".
@@ -126,7 +163,8 @@ const result = await loop({
 console.log(result.stopReason); // "sentinel" | "max_iterations" | "error" | "aborted"
 ```
 
-The library is **stateless** and does no file I/O. Callers own persistence; the `looper` CLI is a thin consumer of the library.
+The library is **stateless** and does no file I/O. Callers own persistence;
+the `looper` CLI is a thin consumer of the library.
 
 ### All options
 
@@ -134,7 +172,7 @@ The library is **stateless** and does no file I/O. Callers own persistence; the 
 import { loop } from "@0xtiby/looper";
 
 const result = await loop({
-  cli: "claude",
+  agent: "claude",
   prompt: "Fix the failing tests. Emit :::DONE::: when finished.",
   cwd: process.cwd(),
   model: "opus",
@@ -150,14 +188,14 @@ const result = await loop({
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `cli` | `"claude" \| "codex" \| "opencode" \| "pi"` | — | **Required.** The AI CLI to spawn. |
-| `prompt` | `string` | — | **Required.** Prompt string passed to the CLI. |
-| `cwd` | `string` | `process.cwd()` | Working directory for the spawned CLI. |
+| `agent` | `"claude" \| "codex" \| "opencode" \| "pi"` | — | **Required.** The Agent to execute. |
+| `prompt` | `string` | — | **Required.** Prompt string passed to the Agent. |
+| `cwd` | `string` | `process.cwd()` | Working directory for the spawned Agent. |
 | `model` | `string` | — | Model override (e.g. `opus`, `sonnet`). |
 | `maxIterations` | `number` | `10` | Hard cap on iterations. |
-| `sentinel` | `string` | `":::LOOPER_DONE:::"` | String the CLI must emit to end the loop. |
+| `sentinel` | `string` | `":::LOOPER_DONE:::"` | String the Agent must emit to end the loop. |
 | `vars` | `Record<string, string>` | `{}` | Template variables for `{{KEY}}` substitution. |
-| `onOutput` | `(chunk: string) => void` | — | Streaming callback for raw CLI stdout. |
+| `onOutput` | `(chunk: string) => void` | — | Streaming callback for raw Agent stdout. |
 | `signal` | `AbortSignal` | — | Aborts the loop between or during iterations. |
 
 #### `LoopResult`
@@ -172,17 +210,18 @@ const result = await loop({
 | Field | Type | Description |
 | --- | --- | --- |
 | `number` | `number` | 1-indexed iteration number. |
-| `exitCode` | `number` | Exit code of the spawned CLI. |
-| `sentinelDetected` | `boolean` | Whether the sentinel was observed in stdout. |
+| `exitCode` | `number` | Exit code of the spawned Agent. |
+| `sentinelDetected` | `boolean` | Whether the sentinel was observed in assistant text. |
 | `stdout` | `string` | Full captured stdout for the iteration. |
 | `startedAt` | `string` | ISO timestamp. |
 | `durationMs` | `number` | Wall-clock duration. |
-| `tokensIn` | `number` | Input tokens reported by the CLI. |
-| `tokensOut` | `number` | Output tokens reported by the CLI. |
+| `tokensIn` | `number` | Input tokens reported by the Agent. |
+| `tokensOut` | `number` | Output tokens reported by the Agent. |
 
 ## Template variables
 
-Prompts can reference `{{VAR}}` placeholders. Substitution is flat (values are not themselves re-substituted). Unknown placeholders are left as-is.
+Prompts can reference `{{VAR}}` placeholders. Substitution is flat (values are
+not themselves re-substituted). Unknown placeholders are left as-is.
 
 Built-in variables:
 
@@ -190,15 +229,28 @@ Built-in variables:
 | --- | --- |
 | `ITERATION` | Current iteration number (1-indexed). |
 | `MAX_ITERATIONS` | Configured `maxIterations`. |
-| `SESSION_ID` | UUID of the session (CLI only). |
+| `RUN_ID` | UUID of the run (CLI only). |
 
-Precedence (higher wins): `--var KEY=VALUE` CLI flag → config `vars` → built-in.
+Precedence (higher wins): `--var KEY=VALUE` CLI flag → config `vars` →
+built-in.
 
 ## Config (`.looper/config.json`)
 
+Looper v2 config is centered on the selected **Agent id**. Custom **ACP Agent
+Servers** are defined in a Zed-style `agent_servers` catalog, and `agent` must
+match one configured server id before a **Run** starts.
+
 ```json
 {
-  "cli": "claude",
+  "agent": "my-custom-agent",
+  "agent_servers": {
+    "my-custom-agent": {
+      "type": "custom",
+      "command": "node",
+      "args": ["./agent.js", "--acp"],
+      "env": {}
+    }
+  },
   "model": "opus",
   "maxIterations": 10,
   "sentinel": ":::LOOPER_DONE:::",
@@ -206,24 +258,29 @@ Precedence (higher wins): `--var KEY=VALUE` CLI flag → config `vars` → built
 }
 ```
 
-All fields are optional. Missing fields fall back to the defaults shown above. CLI flags on `looper run` override the resolved config.
+`args` and `env` are optional for custom servers. If `agent_servers` is present,
+`agent` is required and must refer to one configured server id. CLI flags on
+`looper run` override the resolved config.
 
-## Sessions
+## Runs
 
-Each `looper run` (and `resume`) writes two files under `.looper/sessions/<uuid>`:
+Each `looper run` (and `resume`) writes two files under `.looper/runs/`:
 
-- `<uuid>.json` — session metadata and per-iteration metrics.
-- `<uuid>.log` — raw CLI stdout, separated by `--- ITERATION N [ISO_TIMESTAMP] ---` markers.
+- `<short-id>_<timestamp>.json` — run metadata, per-iteration metrics, and
+  **Resume history**.
+- `<short-id>_<timestamp>.log` — raw Agent stdout, separated by
+  `--- ITERATION N [ISO_TIMESTAMP] ---` markers.
 
-Session state machine: `active` → `completed | interrupted`. Session files are never auto-deleted.
+Run state machine: `active` → `completed | interrupted`. Run files are never
+auto-deleted.
 
-Example session JSON:
+Example run JSON:
 
 ```json
 {
   "id": "…",
   "prompt": "./plan.md",
-  "cli": "claude",
+  "agent": "claude",
   "model": "opus",
   "maxIterations": 10,
   "state": "completed",
@@ -243,9 +300,31 @@ Example session JSON:
 }
 ```
 
+## Migrating from v1
+
+Looper v2 is a **hard break** from the v1 runtime. The codebase, config, and
+CLI vocabulary have moved from spawned-CLI concepts to ACP-native concepts.
+
+Key changes when migrating:
+
+- Config field `cli` is replaced by `agent`. V1 configs fail fast with an
+  explicit error — update `.looper/config.json` to use `agent`.
+- The top-level execution record is now called a **Run**.
+  Persisted files live under `.looper/runs/` (v1 used a different path).
+- The default **Sentinel** remains `:::LOOPER_DONE:::`, but it now only
+  triggers on **Assistant text**, not on tool output or errors.
+- Each iteration starts a new ACP conversation with no carried state
+  between iterations.
+- **Resume** is available for any **Non-complete run**, not only interrupted
+  ones. **Complete runs** are terminal.
+
+For the full v1 documentation, see [`docs/v1/README.md`](./docs/v1/README.md).
+
 ## Pi integration
 
-If you use [pi](https://github.com/mariozechner/pi), looper ships a built-in extension for fire-and-forget background runs inside Zellij panes or tmux sessions.
+If you use [pi](https://github.com/mariozechner/pi), looper ships a built-in
+extension for fire-and-forget background runs inside Zellij panes or tmux
+contexts.
 
 Install looper as a pi package:
 
@@ -253,13 +332,15 @@ Install looper as a pi package:
 pi install git:github.com/0xtiby/looper
 ```
 
-Then in a pi session:
+Then in pi:
 
 ```
 /looper-run
 ```
 
-This opens an interactive wizard that walks you through picking a prompt (from `.looper/*.md` or writing a new one), choosing the AI CLI, and spawning looper in a background pane/session while you keep chatting with pi.
+This opens an interactive wizard that walks you through picking a prompt (from
+`.looper/*.md` or writing a new one), choosing the Agent, and spawning looper
+in a background pane while you keep chatting with pi.
 
 The LLM can also call the `looper_run` tool directly:
 
@@ -278,7 +359,7 @@ The LLM can also call the `looper_run` tool directly:
 - Auto-detects Zellij (preferred) or tmux
 - Scans `.looper/*.md` for reusable prompts
 - Zellij: pane direction and floating mode support
-- tmux: new detached sessions
+- tmux: new detached contexts
 
 ## License
 

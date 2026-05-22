@@ -236,9 +236,21 @@ built-in.
 
 ## Config (`.looper/config.json`)
 
+Looper v2 config is centered on the selected **Agent id**. Custom **ACP Agent
+Servers** are defined in a Zed-style `agent_servers` catalog, and `agent` must
+match one configured server id before a **Run** starts.
+
 ```json
 {
-  "agent": "claude",
+  "agent": "my-custom-agent",
+  "agent_servers": {
+    "my-custom-agent": {
+      "type": "custom",
+      "command": "node",
+      "args": ["./agent.js", "--acp"],
+      "env": {}
+    }
+  },
   "model": "opus",
   "maxIterations": 10,
   "sentinel": ":::LOOPER_DONE:::",
@@ -246,8 +258,9 @@ built-in.
 }
 ```
 
-All fields are optional. Missing fields fall back to the defaults shown above.
-CLI flags on `looper run` override the resolved config.
+`args` and `env` are optional for custom servers. If `agent_servers` is present,
+`agent` is required and must refer to one configured server id. CLI flags on
+`looper run` override the resolved config.
 
 ## Runs
 

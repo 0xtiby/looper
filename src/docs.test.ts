@@ -66,6 +66,13 @@ describe("v2 documentation surface", () => {
     expect(readme).toContain("`agent`");
   });
 
+  it("README shows a Zed-style custom ACP Agent Server config", async () => {
+    const readme = await readFile("README.md", "utf8");
+    expect(readme).toContain('"agent_servers"');
+    expect(readme).toContain('"type": "custom"');
+    expect(readme).toContain('"command": "node"');
+  });
+
   it("archives v1 documentation under docs/v1/", async () => {
     const v1Readme = await readFile("docs/v1/README.md", "utf8");
     expect(v1Readme).toContain("Looper");

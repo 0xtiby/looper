@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AgentIdSchema,
   applyOverrides,
+  BuiltInAgentIdSchema,
   ConfigExistsError,
   ConfigSchema,
   DEFAULT_CONFIG,
@@ -43,20 +44,44 @@ describe("config", () => {
     expect(resolved.sentinel).toBe(DEFAULT_CONFIG.sentinel);
   });
 
+  it("resolveConfig keeps the selected custom Agent Server catalog", () => {
+    const resolved = resolveConfig({
+      agent: "my-custom-agent",
+      agent_servers: {
+        "my-custom-agent": {
+          type: "custom",
+          command: "node",
+          args: ["./agent.js", "--acp"],
+        },
+      },
+    });
+
+    expect(resolved.agentServers[resolved.agent]).toEqual({
+      type: "custom",
+      command: "node",
+      args: ["./agent.js", "--acp"],
+    });
+  });
+
   it("ConfigSchema accepts supported agent values", () => {
     const result = ConfigSchema.safeParse({ agent: "claude" });
     expect(result.success).toBe(true);
     expect(result.data).toEqual(expect.objectContaining({ agent: "claude" }));
   });
 
-  it("ConfigSchema rejects unsupported agent values", () => {
-    const result = ConfigSchema.safeParse({ agent: "gpt" });
-    expect(result.success).toBe(false);
+  it("ConfigSchema accepts custom Agent ids", () => {
+    const result = ConfigSchema.safeParse({ agent: "my-custom-agent" });
+    expect(result.success).toBe(true);
   });
 
-  it("AgentIdSchema allows all v2 agents", () => {
+  it("AgentIdSchema requires a non-empty Agent id", () => {
+    expect(AgentIdSchema.safeParse("my-custom-agent").success).toBe(true);
+    expect(AgentIdSchema.safeParse("").success).toBe(false);
+  });
+
+  it("BuiltInAgentIdSchema allows all currently bundled v2 Agents", () => {
     for (const id of ["claude", "codex", "opencode", "pi"] as const) {
-      expect(AgentIdSchema.safeParse(id).success).toBe(true);
+      expect(BuiltInAgentIdSchema.safeParse(id).success).toBe(true);
     }
   });
 
@@ -86,6 +111,117 @@ describe("config", () => {
     );
     const config = await loadConfig(workDir);
     expect(config).toEqual({ agent: "codex", model: "o3" });
+  });
+
+  it("loadConfig accepts a configured custom ACP Agent Server", async () => {
+    await mkdir(path.join(workDir, ".looper"), { recursive: true });
+    await writeFile(
+      path.join(workDir, ".looper", "config.json"),
+      JSON.stringify({
+        agent: "my-custom-agent",
+        agent_servers: {
+          "my-custom-agent": {
+            type: "custom",
+            command: "node",
+            args: ["./agent.js", "--acp"],
+            env: { NODE_ENV: "test" },
+          },
+        },
+        maxIterations: 10,
+        sentinel: ":::LOOPER_DONE:::",
+      }),
+      "utf8",
+    );
+
+    const config = await loadConfig(workDir);
+
+    expect(config).toEqual({
+      agent: "my-custom-agent",
+      agent_servers: {
+        "my-custom-agent": {
+          type: "custom",
+          command: "node",
+          args: ["./agent.js", "--acp"],
+          env: { NODE_ENV: "test" },
+        },
+      },
+      maxIterations: 10,
+      sentinel: ":::LOOPER_DONE:::",
+    });
+  });
+
+  it("loadConfig fails fast when agent_servers has no selected Agent", async () => {
+    await mkdir(path.join(workDir, ".looper"), { recursive: true });
+    await writeFile(
+      path.join(workDir, ".looper", "config.json"),
+      JSON.stringify({
+        agent_servers: {
+          "my-custom-agent": {
+            type: "custom",
+            command: "node",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadConfig(workDir)).rejects.toThrow(
+      "agent is required when agent_servers is configured",
+    );
+  });
+
+  it("loadConfig fails fast when the selected Agent Server id is unknown", async () => {
+    await mkdir(path.join(workDir, ".looper"), { recursive: true });
+    await writeFile(
+      path.join(workDir, ".looper", "config.json"),
+      JSON.stringify({
+        agent: "missing-agent",
+        agent_servers: {
+          "my-custom-agent": {
+            type: "custom",
+            command: "node",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadConfig(workDir)).rejects.toThrow(
+      "agent must reference a configured Agent Server id: missing-agent",
+    );
+  });
+
+  it("ConfigSchema rejects invalid custom Agent Server definitions", () => {
+    const configs = [
+      {
+        agent: "my-custom-agent",
+        agent_servers: {
+          "my-custom-agent": { type: "custom" },
+        },
+      },
+      {
+        agent: "my-custom-agent",
+        agent_servers: {
+          "my-custom-agent": { type: "custom", command: "" },
+        },
+      },
+      {
+        agent: "my-custom-agent",
+        agent_servers: {
+          "my-custom-agent": { type: "legacy", command: "node" },
+        },
+      },
+      {
+        agent: "my-custom-agent",
+        agent_servers: {
+          "my-custom-agent": { type: "custom", command: "node", args: [1] },
+        },
+      },
+    ];
+
+    for (const config of configs) {
+      expect(ConfigSchema.safeParse(config).success).toBe(false);
+    }
   });
 
   it("loadConfig returns null when the file does not exist", async () => {
@@ -118,6 +254,7 @@ describe("config", () => {
     const raw = await readFile(first, "utf8");
     expect(JSON.parse(raw)).toEqual({
       agent: DEFAULT_CONFIG.agent,
+      agent_servers: DEFAULT_CONFIG.agentServers,
       model: DEFAULT_CONFIG.model,
       maxIterations: DEFAULT_CONFIG.maxIterations,
       sentinel: DEFAULT_CONFIG.sentinel,

@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-export const AgentIdSchema = z.enum(["claude", "codex", "opencode", "pi"]);
+export const AgentIdSchema = z.string().min(1);
 
 export const IterationErrorSchema = z.object({
   code: z.string(),

@@ -14,6 +14,7 @@ import {
   type AgentId,
   AgentIdSchema,
   applyOverrides,
+  BuiltInAgentIdSchema,
   DEFAULT_CONFIG,
   loadConfig,
   resolveConfig,
@@ -47,7 +48,7 @@ import {
 } from "./run.js";
 import { loadPrompt } from "./template.js";
 
-const SUPPORTED_AGENTS: AgentId[] = [...AgentIdSchema.options];
+const SUPPORTED_AGENTS = [...BuiltInAgentIdSchema.options];
 
 interface RunCommandOptions {
   prompt?: string;
@@ -270,7 +271,7 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        agent: resolved.agent,
+        agent: BuiltInAgentIdSchema.parse(resolved.agent),
         prompt,
         cwd: spawnerCwd,
         model: resolveModel(resolved.model),
@@ -373,7 +374,7 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        agent: resumedRun.agent,
+        agent: BuiltInAgentIdSchema.parse(resumedRun.agent),
         prompt,
         cwd,
         model: resolveModel(resumedRun.model),

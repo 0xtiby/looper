@@ -13,10 +13,12 @@ import {
 import {
   type AgentId,
   AgentIdSchema,
+  type AgentServerConfig,
   applyOverrides,
   BuiltInAgentIdSchema,
   DEFAULT_CONFIG,
   loadConfig,
+  type ResolvedConfig,
   resolveConfig,
   writeConfig,
 } from "./config.js";
@@ -172,6 +174,26 @@ function exitCodeForResult(result: LoopResult): number {
   return 0;
 }
 
+class ConfiguredAgentServerError extends Error {
+  constructor(agent: string) {
+    super(`Agent "${agent}" is not configured in agent_servers.`);
+    this.name = "ConfiguredAgentServerError";
+  }
+}
+
+function resolveAgentServer(config: ResolvedConfig): AgentServerConfig {
+  const agentServer = config.agentServers[config.agent];
+  if (agentServer) return agentServer;
+  throw new ConfiguredAgentServerError(config.agent);
+}
+
+async function preflightBuiltInAgent(config: ResolvedConfig): Promise<void> {
+  if (!BuiltInAgentIdSchema.safeParse(config.agent).success) return;
+  await preflight(config.agent, config.model, {
+    discoverAgents: discoverAcpAgents,
+  });
+}
+
 const program = new Command();
 
 program
@@ -228,10 +250,10 @@ program
       sentinel: options.sentinel,
     });
 
+    const agentServer = resolveAgentServer(resolved);
+
     try {
-      await preflight(resolved.agent, resolved.model, {
-        discoverAgents: discoverAcpAgents,
-      });
+      await preflightBuiltInAgent(resolved);
     } catch (err) {
       if (
         err instanceof MissingAgentError ||
@@ -271,7 +293,8 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        agent: BuiltInAgentIdSchema.parse(resolved.agent),
+        agent: resolved.agent,
+        agentServer,
         prompt,
         cwd: spawnerCwd,
         model: resolveModel(resolved.model),
@@ -348,9 +371,17 @@ program
     const fileConfig = await loadConfig(cwd);
     const resolved = resolveConfig(fileConfig);
 
+    const agentServer = resolveAgentServer({
+      ...resolved,
+      agent: resumedRun.agent,
+      model: resumedRun.model ?? resolved.model,
+    });
+
     try {
-      await preflight(resumedRun.agent, resumedRun.model ?? undefined, {
-        discoverAgents: discoverAcpAgents,
+      await preflightBuiltInAgent({
+        ...resolved,
+        agent: resumedRun.agent,
+        model: resumedRun.model ?? resolved.model,
       });
     } catch (err) {
       if (
@@ -374,7 +405,8 @@ program
     let result: LoopResult;
     try {
       result = await loop({
-        agent: BuiltInAgentIdSchema.parse(resumedRun.agent),
+        agent: resumedRun.agent,
+        agentServer,
         prompt,
         cwd,
         model: resolveModel(resumedRun.model),

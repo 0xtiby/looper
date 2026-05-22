@@ -5,7 +5,12 @@ import type {
   SpawnOptions,
 } from "@0xtiby/spawner";
 import { describe, expect, it, vi } from "vitest";
-import { loop, type Spawner } from "./index.js";
+import {
+  type AcpClient,
+  type AcpClientFactory,
+  loop,
+  type Spawner,
+} from "./index.js";
 
 async function* cliEvents(events: CliEvent[]): AsyncGenerator<CliEvent> {
   for (const event of events) {
@@ -44,7 +49,67 @@ function okResult(): CliResult {
   };
 }
 
+async function* acpEvents(
+  events: { type: "assistant_text"; text: string }[],
+): AsyncGenerator<{ type: "assistant_text"; text: string }> {
+  for (const event of events) {
+    yield event;
+  }
+}
+
 describe("loop", () => {
+  it("runs a Fresh ACP session for a custom Agent Server", async () => {
+    const calls: string[] = [];
+    const client: AcpClient = {
+      initialize: async () => {
+        calls.push("initialize");
+      },
+      newSession: async (input) => {
+        calls.push(`session/new:${input.cwd}`);
+        return { sessionId: "fresh-session-1" };
+      },
+      prompt: (input) => {
+        calls.push(
+          `session/prompt:${input.sessionId}:${input.content[0]?.text}`,
+        );
+        return acpEvents([{ type: "assistant_text", text: "done" }]);
+      },
+      close: async () => {
+        calls.push("close");
+      },
+    };
+    const createAcpClient: AcpClientFactory = (input) => {
+      calls.push(
+        `launch:${input.server.command} ${(input.server.args ?? []).join(" ")}`,
+      );
+      return client;
+    };
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: {
+          type: "custom",
+          command: "node",
+          args: ["./agent-server.js"],
+        },
+        prompt: "do the thing",
+        cwd: "/work",
+        maxIterations: 1,
+      },
+      { createAcpClient },
+    );
+
+    expect(calls).toEqual([
+      "launch:node ./agent-server.js",
+      "initialize",
+      "session/new:/work",
+      "session/prompt:fresh-session-1:do the thing",
+      "close",
+    ]);
+    expect(result.stopReason).toBe("max_iterations");
+  });
+
   it("spawns the CLI with the given prompt, agent, and cwd", async () => {
     const spawn = vi.fn<(options: SpawnOptions) => CliProcess>(() =>
       fakeProcess(okResult()),

@@ -1,8 +1,54 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { AcpAgentServerLaunch } from "./acp.js";
+import { type AgentServerConfig, AgentServerSchema } from "./config.js";
 
 export const AgentIdSchema = z.string().min(1);
+
+export const AcpAgentServerSourceTypeSchema = z.enum(["custom", "registry"]);
+export type AcpAgentServerSourceType = z.infer<
+  typeof AcpAgentServerSourceTypeSchema
+>;
+
+export const AcpAgentServerLaunchSnapshotSchema = z
+  .object({
+    type: AcpAgentServerSourceTypeSchema,
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+export const AcpAgentServerSnapshotSchema = z
+  .object({
+    id: AgentIdSchema,
+    sourceType: AcpAgentServerSourceTypeSchema,
+    config: AgentServerSchema,
+    launch: AcpAgentServerLaunchSnapshotSchema,
+  })
+  .strict();
+
+export type AcpAgentServerSnapshot = z.infer<
+  typeof AcpAgentServerSnapshotSchema
+>;
+
+export interface AcpAgentServerSnapshotInput {
+  id: z.infer<typeof AgentIdSchema>;
+  config: AgentServerConfig;
+  launch: AcpAgentServerLaunch;
+}
+
+export function snapshotAcpAgentServer(
+  input: AcpAgentServerSnapshotInput,
+): AcpAgentServerSnapshot {
+  return AcpAgentServerSnapshotSchema.parse({
+    id: input.id,
+    sourceType: input.config.type,
+    config: input.config,
+    launch: input.launch,
+  });
+}
 
 export const IterationErrorSchema = z.object({
   code: z.string(),
@@ -26,8 +72,10 @@ export const ResumeHistoryEntrySchema = z.object({
   resumedAt: z.string(),
   fromIteration: z.number().int().positive(),
   previousAgent: z.string().optional(),
+  previousAgentServer: AcpAgentServerSnapshotSchema.optional(),
   previousModel: z.string().nullable().optional(),
   newAgent: z.string().optional(),
+  newAgentServer: AcpAgentServerSnapshotSchema.optional(),
   newModel: z.string().nullable().optional(),
 });
 
@@ -44,20 +92,27 @@ export const RunStopReasonSchema = z.enum([
 ]);
 export type RunStopReason = z.infer<typeof RunStopReasonSchema>;
 
-export const RunSchema = z.object({
-  id: z.string().min(1),
-  prompt: z.string(),
-  agent: AgentIdSchema,
-  model: z.string().nullable(),
-  maxIterations: z.number().int().positive(),
-  vars: z.record(z.string(), z.string()).default({}),
-  state: RunStateSchema,
-  startedAt: z.string(),
-  completedAt: z.string().nullable(),
-  stopReason: RunStopReasonSchema.nullable(),
-  iterations: z.array(IterationRecordSchema),
-  resumeHistory: z.array(ResumeHistoryEntrySchema).default([]),
-});
+export const RunSchema = z
+  .object({
+    id: z.string().min(1),
+    prompt: z.string(),
+    resolvedPrompt: z.string().optional(),
+    agent: AgentIdSchema,
+    agentServer: AcpAgentServerSnapshotSchema.optional(),
+    model: z.string().nullable(),
+    maxIterations: z.number().int().positive(),
+    vars: z.record(z.string(), z.string()).default({}),
+    state: RunStateSchema,
+    startedAt: z.string(),
+    completedAt: z.string().nullable(),
+    stopReason: RunStopReasonSchema.nullable(),
+    iterations: z.array(IterationRecordSchema),
+    resumeHistory: z.array(ResumeHistoryEntrySchema).default([]),
+  })
+  .transform((run) => ({
+    ...run,
+    resolvedPrompt: run.resolvedPrompt ?? run.prompt,
+  }));
 
 export type Run = z.infer<typeof RunSchema>;
 
@@ -65,6 +120,7 @@ export interface NewRunInput {
   id: string;
   prompt: string;
   agent: z.infer<typeof AgentIdSchema>;
+  agentServer?: AcpAgentServerSnapshot;
   model: string | null;
   maxIterations: number;
   vars?: Record<string, string>;
@@ -72,6 +128,7 @@ export interface NewRunInput {
 
 export interface ResumeOverride {
   agent?: z.infer<typeof AgentIdSchema>;
+  agentServer?: AcpAgentServerSnapshot;
   model?: string | null;
 }
 
@@ -79,7 +136,9 @@ export function newActiveRun(input: NewRunInput): Run {
   return {
     id: input.id,
     prompt: input.prompt,
+    resolvedPrompt: input.prompt,
     agent: input.agent,
+    agentServer: input.agentServer,
     model: input.model,
     maxIterations: input.maxIterations,
     vars: input.vars ?? {},
@@ -97,8 +156,12 @@ export function applyResumeOverride(run: Run, override: ResumeOverride): Run {
     override.agent !== undefined && override.agent !== run.agent;
   const modelChanged =
     override.model !== undefined && override.model !== run.model;
+  const agentServerChanged = hasAgentServerChanged(
+    run.agentServer,
+    override.agentServer,
+  );
 
-  if (!agentChanged && !modelChanged) {
+  if (!agentChanged && !modelChanged && !agentServerChanged) {
     return run;
   }
 
@@ -110,6 +173,12 @@ export function applyResumeOverride(run: Run, override: ResumeOverride): Run {
     ...(agentChanged
       ? { previousAgent: run.agent, newAgent: override.agent }
       : {}),
+    ...(agentServerChanged
+      ? {
+          previousAgentServer: run.agentServer,
+          newAgentServer: override.agentServer,
+        }
+      : {}),
     ...(modelChanged
       ? { previousModel: run.model, newModel: override.model }
       : {}),
@@ -118,6 +187,7 @@ export function applyResumeOverride(run: Run, override: ResumeOverride): Run {
   return {
     ...run,
     agent: override.agent ?? run.agent,
+    agentServer: override.agentServer ?? run.agentServer,
     model: override.model ?? run.model,
     resumeHistory: [...run.resumeHistory, entry],
   };
@@ -125,6 +195,23 @@ export function applyResumeOverride(run: Run, override: ResumeOverride): Run {
 
 export function hasResumeHistory(run: Run): boolean {
   return run.resumeHistory.length > 0;
+}
+
+function hasAgentServerChanged(
+  current: AcpAgentServerSnapshot | undefined,
+  next: AcpAgentServerSnapshot | undefined,
+): boolean {
+  if (next === undefined) return false;
+  if (current === undefined) return true;
+  return (
+    current.id !== next.id ||
+    current.sourceType !== next.sourceType ||
+    current.launch.command !== next.launch.command ||
+    JSON.stringify(current.launch.args ?? []) !==
+      JSON.stringify(next.launch.args ?? []) ||
+    JSON.stringify(current.launch.env ?? {}) !==
+      JSON.stringify(next.launch.env ?? {})
+  );
 }
 
 export function finalizeRun(

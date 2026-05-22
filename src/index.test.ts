@@ -384,6 +384,53 @@ describe("loop", () => {
     expect(result.stopReason).toBe("max_iterations");
   });
 
+  it("resumed ACP Runs continue at the next iteration with Fresh sessions", async () => {
+    const calls: string[] = [];
+    const createAcpClient: AcpClientFactory = () => ({
+      initialize: async () => {
+        calls.push("initialize");
+      },
+      newSession: async () => {
+        const sessionId = `fresh-session-${calls.filter((call) => call === "session/new").length + 1}`;
+        calls.push("session/new");
+        return { sessionId, configOptions: [] };
+      },
+      prompt: (input) => {
+        calls.push(`prompt:${input.sessionId}:${input.content[0]?.text}`);
+        return acpEvents([{ type: "assistant_text", text: "still working" }]);
+      },
+      close: async () => {
+        calls.push("close");
+      },
+    });
+
+    const result = await loop(
+      {
+        agent: "custom-agent",
+        agentServer: { type: "custom", command: "agent" },
+        prompt: "resume {{ITERATION}} from persisted prompt",
+        cwd: "/work",
+        maxIterations: 3,
+        startIteration: 2,
+      },
+      { createAcpClient },
+    );
+
+    expect(result.iterations.map((iteration) => iteration.number)).toEqual([
+      2, 3,
+    ]);
+    expect(calls).toEqual([
+      "initialize",
+      "session/new",
+      "prompt:fresh-session-1:resume 2 from persisted prompt",
+      "close",
+      "initialize",
+      "session/new",
+      "prompt:fresh-session-2:resume 3 from persisted prompt",
+      "close",
+    ]);
+  });
+
   it("stops an ACP Run when the Sentinel appears in Assistant text", async () => {
     const createAcpClient = vi.fn<AcpClientFactory>(() => ({
       initialize: async () => {},

@@ -12,6 +12,7 @@ import {
   RunSchema,
   readRun,
   runBasename,
+  snapshotAcpAgentServer,
   writeRun,
 } from "./run.js";
 
@@ -40,6 +41,89 @@ describe("run", () => {
     expect(run.completedAt).toBeNull();
     expect(run.stopReason).toBeNull();
     expect(RunSchema.safeParse(run).success).toBe(true);
+  });
+
+  it("newActiveRun persists custom ACP Agent Server context and Resolved prompt", () => {
+    const agentServer = snapshotAcpAgentServer({
+      id: "my-custom-agent",
+      config: {
+        type: "custom",
+        command: "node",
+        args: ["./agent.js", "--acp"],
+        env: { NODE_ENV: "test" },
+      },
+      launch: {
+        type: "custom",
+        command: "node",
+        args: ["./agent.js", "--acp"],
+        env: { NODE_ENV: "test" },
+      },
+    });
+
+    const run = newActiveRun({
+      id: "custom-run",
+      prompt: "Resolved prompt from stdin",
+      agent: "my-custom-agent",
+      agentServer,
+      model: null,
+      maxIterations: 2,
+    });
+
+    expect(run.resolvedPrompt).toBe("Resolved prompt from stdin");
+    expect(run.agentServer).toEqual({
+      id: "my-custom-agent",
+      sourceType: "custom",
+      config: {
+        type: "custom",
+        command: "node",
+        args: ["./agent.js", "--acp"],
+        env: { NODE_ENV: "test" },
+      },
+      launch: {
+        type: "custom",
+        command: "node",
+        args: ["./agent.js", "--acp"],
+        env: { NODE_ENV: "test" },
+      },
+    });
+    expect(RunSchema.parse(run).agentServer).toEqual(run.agentServer);
+  });
+
+  it("newActiveRun persists registry-backed ACP Agent Server context", () => {
+    const agentServer = snapshotAcpAgentServer({
+      id: "zed-agent",
+      config: {
+        type: "registry",
+        id: "zed-agent",
+        registryUrl: "https://registry.example.test/registry.json",
+      },
+      launch: {
+        type: "registry",
+        command: "npx",
+        args: ["-y", "@zed/agent"],
+      },
+    });
+
+    const run = newActiveRun({
+      id: "registry-run",
+      prompt: "Build from the PRD",
+      agent: "zed-agent",
+      agentServer,
+      model: "sonnet",
+      maxIterations: 3,
+    });
+
+    expect(run.agentServer?.sourceType).toBe("registry");
+    expect(run.agentServer?.config).toEqual({
+      type: "registry",
+      id: "zed-agent",
+      registryUrl: "https://registry.example.test/registry.json",
+    });
+    expect(run.agentServer?.launch).toEqual({
+      type: "registry",
+      command: "npx",
+      args: ["-y", "@zed/agent"],
+    });
   });
 
   it("finalizeRun with 'aborted' transitions to interrupted", () => {
@@ -228,6 +312,23 @@ describe("run", () => {
     expect(parsed.data?.resumeHistory).toEqual([]);
   });
 
+  it("RunSchema backfills Resolved prompt from legacy prompt records", () => {
+    const parsed = RunSchema.parse({
+      id: "legacy",
+      prompt: "persisted prompt body",
+      agent: "claude",
+      model: null,
+      maxIterations: 1,
+      state: "active",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      stopReason: null,
+      iterations: [],
+    });
+
+    expect(parsed.resolvedPrompt).toBe("persisted prompt body");
+  });
+
   it("RunSchema parses runs with resumeHistory", () => {
     const run = {
       id: "legacy",
@@ -362,6 +463,59 @@ describe("run", () => {
       previousModel: "sonnet",
       newAgent: "codex",
       newModel: "o3",
+    });
+  });
+
+  it("applyResumeOverride switches ACP Agent Server snapshot for a Resume override", () => {
+    const originalAgentServer = snapshotAcpAgentServer({
+      id: "local-agent",
+      config: { type: "custom", command: "node", args: ["./local.js"] },
+      launch: { type: "custom", command: "node", args: ["./local.js"] },
+    });
+    const registryAgentServer = snapshotAcpAgentServer({
+      id: "registry-agent",
+      config: { type: "registry", id: "registry-agent" },
+      launch: {
+        type: "registry",
+        command: "npx",
+        args: ["-y", "@acp/registry-agent"],
+      },
+    });
+    const run = newActiveRun({
+      id: "abc",
+      prompt: "p",
+      agent: "local-agent",
+      agentServer: originalAgentServer,
+      model: "sonnet",
+      maxIterations: 3,
+    });
+    run.iterations = [
+      {
+        number: 1,
+        exitCode: 0,
+        durationMs: 100,
+        tokensIn: 10,
+        tokensOut: 20,
+        sentinelDetected: false,
+        error: null,
+      },
+    ];
+
+    const updated = applyResumeOverride(run, {
+      agent: "registry-agent",
+      agentServer: registryAgentServer,
+      model: "opus",
+    });
+
+    expect(updated.agentServer).toEqual(registryAgentServer);
+    expect(updated.resumeHistory[0]).toMatchObject({
+      fromIteration: 2,
+      previousAgent: "local-agent",
+      newAgent: "registry-agent",
+      previousModel: "sonnet",
+      newModel: "opus",
+      previousAgentServer: originalAgentServer,
+      newAgentServer: registryAgentServer,
     });
   });
 

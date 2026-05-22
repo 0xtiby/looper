@@ -30,6 +30,7 @@ import {
   resolveInitAgent,
   UnknownAgentError,
 } from "./init.js";
+import { formatRunInspectionJson } from "./inspect.js";
 import {
   MissingAgentError,
   IncompatibleAgentError as PreflightIncompatibleAgentError,
@@ -38,6 +39,7 @@ import {
 } from "./preflight.js";
 import { resolveRegistryAgentServer } from "./registry.js";
 import {
+  type AcpAgentServerSnapshot,
   applyResumeOverride,
   finalizeRun,
   hasResumeHistory,
@@ -47,6 +49,7 @@ import {
   type Run,
   readRun,
   runBasename,
+  snapshotAcpAgentServer,
   writeRun,
 } from "./run.js";
 import { loadPrompt } from "./template.js";
@@ -182,18 +185,29 @@ class ConfiguredAgentServerError extends Error {
   }
 }
 
+interface ResolvedAgentServerContext {
+  snapshot: AcpAgentServerSnapshot;
+  launch: AcpAgentServerLaunch;
+}
+
 async function resolveAgentServer(
   config: ResolvedConfig,
-): Promise<AcpAgentServerLaunch> {
+): Promise<ResolvedAgentServerContext> {
   const agentServer = config.agentServers[config.agent];
   if (!agentServer) throw new ConfiguredAgentServerError(config.agent);
-  if (agentServer.type === "custom") return agentServer;
-  const resolved = await resolveRegistryAgentServer(
-    agentServer,
-    undefined,
-    config.agent,
-  );
-  return resolved.launch;
+  const launch =
+    agentServer.type === "custom"
+      ? agentServer
+      : (await resolveRegistryAgentServer(agentServer, undefined, config.agent))
+          .launch;
+  return {
+    snapshot: snapshotAcpAgentServer({
+      id: config.agent,
+      config: agentServer,
+      launch,
+    }),
+    launch,
+  };
 }
 
 async function preflightBuiltInAgent(config: ResolvedConfig): Promise<void> {
@@ -234,9 +248,7 @@ program
   .description("Run the loop against an AI Agent")
   .option("-p, --prompt <value>", "inline string or path to a prompt file")
   .option("--prompt-stdin", "read the prompt from stdin")
-  .addOption(
-    new Option("--agent <id>", "Agent id to run").choices(SUPPORTED_AGENTS),
-  )
+  .addOption(new Option("--agent <id>", "Agent id to run"))
   .option("--model <name>", "model override")
   .option(
     "--max-iterations <n>",
@@ -294,6 +306,7 @@ program
       id: runId,
       prompt,
       agent: resolved.agent,
+      agentServer: agentServer.snapshot,
       model: resolved.model,
       maxIterations: resolved.maxIterations,
       vars,
@@ -308,7 +321,7 @@ program
     try {
       result = await loop({
         agent: resolved.agent,
-        agentServer,
+        agentServer: agentServer.launch,
         prompt,
         cwd: spawnerCwd,
         model: resolveModel(resolved.model),
@@ -340,11 +353,7 @@ program
 program
   .command("resume [run-id]")
   .description("Resume an interrupted run (or list them with no id)")
-  .addOption(
-    new Option("--agent <id>", "Agent override for the resumed run").choices(
-      SUPPORTED_AGENTS,
-    ),
-  )
+  .addOption(new Option("--agent <id>", "Agent override for the resumed run"))
   .option("--model <name>", "model override for the resumed run")
   .action(async (runId: string | undefined, options: ResumeCommandOptions) => {
     const cwd = process.cwd();
@@ -377,19 +386,30 @@ program
       process.exit(1);
     }
 
+    const fileConfig = await loadConfig(cwd);
+    const resolved = resolveConfig(fileConfig);
+    const overrideAgentServer = options.agent
+      ? await resolveAgentServer({
+          ...resolved,
+          agent: options.agent,
+          model: options.model ?? resolved.model,
+        })
+      : null;
     const resumedRun = applyResumeOverride(run, {
       agent: options.agent,
+      agentServer: overrideAgentServer?.snapshot,
       model: options.model,
     });
 
-    const fileConfig = await loadConfig(cwd);
-    const resolved = resolveConfig(fileConfig);
-
-    const agentServer = await resolveAgentServer({
-      ...resolved,
-      agent: resumedRun.agent,
-      model: resumedRun.model ?? resolved.model,
-    });
+    const agentServer =
+      resumedRun.agentServer?.launch ??
+      (
+        await resolveAgentServer({
+          ...resolved,
+          agent: resumedRun.agent,
+          model: resumedRun.model ?? resolved.model,
+        })
+      ).launch;
 
     try {
       await preflightBuiltInAgent({
@@ -409,7 +429,7 @@ program
       throw err;
     }
 
-    const prompt = resumedRun.prompt;
+    const prompt = resumedRun.resolvedPrompt;
 
     const controller = new AbortController();
     const onSigint = () => controller.abort();
@@ -463,7 +483,7 @@ program
       console.error(`Run ${runId} not found`);
       process.exit(1);
     }
-    console.log(JSON.stringify(run, null, 2));
+    process.stdout.write(formatRunInspectionJson(run));
   });
 
 program
